@@ -1,0 +1,27 @@
+{
+  "rule": "RECAPTURE if seed > max(reserve seed)*1.5",
+  "threshold": 30.028369791880742,
+  "margin": 1.5,
+  "design": "B",
+  "template_board": "B_04",
+  "anchor": "B_04_v0_c01",
+  "tolerance_sources": [
+    "B_04_v0_c02",
+    "B_04_v0_c03",
+    "B_04_v0_c04",
+    "B_04_v0_c05",
+    "B_04_v0_c06",
+    "B_04_v0_c07",
+    "B_04_v0_c08",
+    "B_04_v0_c09",
+    "B_04_v0_c10"
+  ],
+  "source_images": [
+    "B_04_v0_c11",
+    "B_04_v0_c12",
+    "B_04_v0_c13",
+    "B_04_v0_c14",
+    "B_04_v0_c15"
+  ],
+  "scope_fraction": 0.5257
+}

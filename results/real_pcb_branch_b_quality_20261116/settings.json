@@ -1,0 +1,13 @@
+{
+  "rule": "RECAPTURE if seed > max(source seed)*1.5",
+  "threshold": 6.022344919833905,
+  "margin": 1.5,
+  "source_images": [
+    "A_01_v0_c05",
+    "A_02_v0_c05",
+    "A_04_v0_c05",
+    "A_05_v0_c05"
+  ],
+  "template_run": "real_pcb_branch_b_ranking_20261116_180343",
+  "candidate_count_role": "diagnostic only"
+}

@@ -1,0 +1,169 @@
+B memory captures {'B_00': 8, 'B_01': 8, 'B_02': 8, 'B_03': 8, 'B_04': 8} 16s
+B B_00 norm 1.111 39 43s
+B B_01 norm 1.115 80 70s
+B B_02 norm 1.116 121 98s
+B B_03 norm 1.123 161 125s
+B B_04 norm 1.115 176 139s
+C memory captures {'C_00': 8, 'C_01': 8, 'C_02': 8} 147s
+C C_00 norm 1.098 215 162s
+C C_01 norm 1.109 252 176s
+C C_02 norm 1.183 291 191s
+{
+ "rule": "smallest grid peak score with <=5% held-out B/C GOOD captures flagged",
+ "P_REVIEW_SCORE": 1.94,
+ "not_aligned": 0,
+ "all": {
+  "good": 120,
+  "good_flagged": 6,
+  "defect_images": 171,
+  "defect_images_flagged": 171,
+  "boxes": 1589,
+  "box_hits_top8": 1589,
+  "box_hits_at_T": 1589,
+  "label_peak_hits_at_T": 1096,
+  "false_comps_on_defect_images": 29,
+  "false_comps_on_good_images": 6
+ },
+ "branch_r_subset": {
+  "good": 90,
+  "good_flagged": 6,
+  "defect_images": 147,
+  "defect_images_flagged": 147,
+  "boxes": 1373,
+  "box_hits_top8": 1373,
+  "box_hits_at_T": 1373,
+  "label_peak_hits_at_T": 932,
+  "false_comps_on_defect_images": 29,
+  "false_comps_on_good_images": 6
+ },
+ "per_design": {
+  "B": {
+   "good": 75,
+   "good_flagged": 5,
+   "defect_images": 101,
+   "defect_images_flagged": 101,
+   "boxes": 969,
+   "box_hits_top8": 969,
+   "box_hits_at_T": 969,
+   "label_peak_hits_at_T": 722,
+   "false_comps_on_defect_images": 27,
+   "false_comps_on_good_images": 5
+  },
+  "C": {
+   "good": 45,
+   "good_flagged": 1,
+   "defect_images": 70,
+   "defect_images_flagged": 70,
+   "boxes": 620,
+   "box_hits_top8": 620,
+   "box_hits_at_T": 620,
+   "label_peak_hits_at_T": 374,
+   "false_comps_on_defect_images": 2,
+   "false_comps_on_good_images": 1
+  }
+ },
+ "per_board": {
+  "B_00": {
+   "good": 15,
+   "good_flagged": 5,
+   "defect_images": 24,
+   "defect_images_flagged": 24,
+   "boxes": 240,
+   "box_hits_top8": 240,
+   "box_hits_at_T": 240,
+   "label_peak_hits_at_T": 209,
+   "false_comps_on_defect_images": 9,
+   "false_comps_on_good_images": 5
+  },
+  "B_01": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 26,
+   "defect_images_flagged": 26,
+   "boxes": 238,
+   "box_hits_top8": 238,
+   "box_hits_at_T": 238,
+   "label_peak_hits_at_T": 159,
+   "false_comps_on_defect_images": 0,
+   "false_comps_on_good_images": 0
+  },
+  "B_02": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 26,
+   "defect_images_flagged": 26,
+   "boxes": 250,
+   "box_hits_top8": 250,
+   "box_hits_at_T": 250,
+   "label_peak_hits_at_T": 168,
+   "false_comps_on_defect_images": 1,
+   "false_comps_on_good_images": 0
+  },
+  "B_03": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 25,
+   "defect_images_flagged": 25,
+   "boxes": 241,
+   "box_hits_top8": 241,
+   "box_hits_at_T": 241,
+   "label_peak_hits_at_T": 186,
+   "false_comps_on_defect_images": 17,
+   "false_comps_on_good_images": 0
+  },
+  "B_04": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 0,
+   "defect_images_flagged": 0,
+   "boxes": 0,
+   "box_hits_top8": 0,
+   "box_hits_at_T": 0,
+   "label_peak_hits_at_T": 0,
+   "false_comps_on_defect_images": 0,
+   "false_comps_on_good_images": 0
+  },
+  "C_00": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 24,
+   "defect_images_flagged": 24,
+   "boxes": 216,
+   "box_hits_top8": 216,
+   "box_hits_at_T": 216,
+   "label_peak_hits_at_T": 164,
+   "false_comps_on_defect_images": 0,
+   "false_comps_on_good_images": 0
+  },
+  "C_01": {
+   "good": 15,
+   "good_flagged": 1,
+   "defect_images": 22,
+   "defect_images_flagged": 22,
+   "boxes": 201,
+   "box_hits_top8": 201,
+   "box_hits_at_T": 201,
+   "label_peak_hits_at_T": 85,
+   "false_comps_on_defect_images": 0,
+   "false_comps_on_good_images": 1
+  },
+  "C_02": {
+   "good": 15,
+   "good_flagged": 0,
+   "defect_images": 24,
+   "defect_images_flagged": 24,
+   "boxes": 203,
+   "box_hits_top8": 203,
+   "box_hits_at_T": 203,
+   "label_peak_hits_at_T": 125,
+   "false_comps_on_defect_images": 2,
+   "false_comps_on_good_images": 0
+  }
+ },
+ "good_peak_pct": {
+  "50": 1.645,
+  "90": 1.899,
+  "95": 1.938,
+  "100": 2.06
+ }
+}

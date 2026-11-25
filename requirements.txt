@@ -1,0 +1,7 @@
+# Thu vien cho ban UI. torch/torchvision cai rieng (xem README.md).
+ultralytics==8.4.182
+opencv-python>=4.12.0.88
+numpy>=1.26.4,<3
+pillow==12.3.0
+pyyaml==6.0.3
+pytest==9.1.1

@@ -1,0 +1,12 @@
+{
+  "_note": "Toa do mm (x, y, z, r) cua Dobot. GIA TRI MAU - thanh vien lam robot phai day lai tren tram that. home phai nam ngoai khung hinh camera.",
+  "port": "COM3",
+  "home": [200.0, 0.0, 60.0, 0.0],
+  "pick": [250.0, 0.0, -40.0, 0.0],
+  "bins": {
+    "FAIL": [150.0, -180.0, -20.0, 0.0],
+    "PASS": [150.0, 180.0, -20.0, 0.0]
+  },
+  "safe_z": 60.0,
+  "suction_settle_s": 0.5
+}

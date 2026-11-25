@@ -1,0 +1,30 @@
+{
+  "B": {
+    "n": 176,
+    "old_bad": 62,
+    "new_bad": 0,
+    "old_bad_v0": 43,
+    "old_bad_defect": 19
+  },
+  "C": {
+    "n": 115,
+    "old_bad": 112,
+    "new_bad": 0,
+    "old_bad_v0": 42,
+    "old_bad_defect": 70
+  },
+  "D": {
+    "n": 90,
+    "old_bad": 89,
+    "new_bad": 7,
+    "old_bad_v0": 59,
+    "old_bad_defect": 30
+  },
+  "G": {
+    "n": 40,
+    "old_bad": 27,
+    "new_bad": 0,
+    "old_bad_v0": 17,
+    "old_bad_defect": 10
+  }
+}

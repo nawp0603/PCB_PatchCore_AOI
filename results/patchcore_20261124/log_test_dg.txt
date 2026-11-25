@@ -1,0 +1,162 @@
+locked: global T 1.3 | B/C hits global 1275 pos 1096
+primary D_01 norm 0.41 30
+primary D_02 norm 0.41 30
+primary G_01 norm 0.329 20
+secondary_2board D_01 norm 0.424 30
+secondary_2board D_02 norm 0.44 30
+{
+ "variant": "global",
+ "P_REVIEW_SCORE": 1.3,
+ "primary": {
+  "good": 50,
+  "defect_images": 30,
+  "boxes": 130,
+  "not_aligned": 3,
+  "good_concl_yolo": {
+   "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 50
+  },
+  "good_concl_yolo_patchcore": {
+   "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 45,
+   "REVIEW": 5
+  },
+  "defect_concl_yolo": {
+   "FAIL": 30
+  },
+  "defect_concl_yolo_patchcore": {
+   "FAIL": 27,
+   "RECAPTURE": 3
+  },
+  "good_peak_over_T": 5,
+  "defect_peak_over_T": 27,
+  "false_comps_on_good": 7,
+  "false_comps_on_defect": 21,
+  "box_hits": {
+   "yolo": 126,
+   "patchcore_top8": 116,
+   "patchcore_label_peak_at_T": 111,
+   "yolo_or_patchcore_label_peak_at_T": 128,
+   "yolo_or_patchcore_top8": 129
+  }
+ },
+ "primary_per_board": {
+  "D_01": {
+   "good": 20,
+   "defect_images": 10,
+   "boxes": 40,
+   "not_aligned": 3,
+   "good_concl_yolo": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 20
+   },
+   "good_concl_yolo_patchcore": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 20
+   },
+   "defect_concl_yolo": {
+    "FAIL": 10
+   },
+   "defect_concl_yolo_patchcore": {
+    "FAIL": 7,
+    "RECAPTURE": 3
+   },
+   "good_peak_over_T": 0,
+   "defect_peak_over_T": 7,
+   "false_comps_on_good": 0,
+   "false_comps_on_defect": 2,
+   "box_hits": {
+    "yolo": 37,
+    "patchcore_top8": 26,
+    "patchcore_label_peak_at_T": 26,
+    "yolo_or_patchcore_label_peak_at_T": 39,
+    "yolo_or_patchcore_top8": 39
+   }
+  },
+  "D_02": {
+   "good": 20,
+   "defect_images": 10,
+   "boxes": 45,
+   "not_aligned": 0,
+   "good_concl_yolo": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 20
+   },
+   "good_concl_yolo_patchcore": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 20
+   },
+   "defect_concl_yolo": {
+    "FAIL": 10
+   },
+   "defect_concl_yolo_patchcore": {
+    "FAIL": 10
+   },
+   "good_peak_over_T": 0,
+   "defect_peak_over_T": 10,
+   "false_comps_on_good": 0,
+   "false_comps_on_defect": 6,
+   "box_hits": {
+    "yolo": 44,
+    "patchcore_top8": 45,
+    "patchcore_label_peak_at_T": 40,
+    "yolo_or_patchcore_label_peak_at_T": 44,
+    "yolo_or_patchcore_top8": 45
+   }
+  },
+  "G_01": {
+   "good": 10,
+   "defect_images": 10,
+   "boxes": 45,
+   "not_aligned": 0,
+   "good_concl_yolo": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 10
+   },
+   "good_concl_yolo_patchcore": {
+    "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 5,
+    "REVIEW": 5
+   },
+   "defect_concl_yolo": {
+    "FAIL": 10
+   },
+   "defect_concl_yolo_patchcore": {
+    "FAIL": 10
+   },
+   "good_peak_over_T": 5,
+   "defect_peak_over_T": 10,
+   "false_comps_on_good": 7,
+   "false_comps_on_defect": 13,
+   "box_hits": {
+    "yolo": 45,
+    "patchcore_top8": 45,
+    "patchcore_label_peak_at_T": 45,
+    "yolo_or_patchcore_label_peak_at_T": 45,
+    "yolo_or_patchcore_top8": 45
+   }
+  }
+ },
+ "secondary_2board_D": {
+  "good": 40,
+  "defect_images": 20,
+  "boxes": 85,
+  "not_aligned": 3,
+  "good_concl_yolo": {
+   "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 40
+  },
+  "good_concl_yolo_patchcore": {
+   "KHÔNG THẤY LỖI (chưa hiệu chuẩn)": 40
+  },
+  "defect_concl_yolo": {
+   "FAIL": 20
+  },
+  "defect_concl_yolo_patchcore": {
+   "FAIL": 17,
+   "RECAPTURE": 3
+  },
+  "good_peak_over_T": 0,
+  "defect_peak_over_T": 17,
+  "false_comps_on_good": 0,
+  "false_comps_on_defect": 0,
+  "box_hits": {
+   "yolo": 81,
+   "patchcore_top8": 71,
+   "patchcore_label_peak_at_T": 56,
+   "yolo_or_patchcore_label_peak_at_T": 81,
+   "yolo_or_patchcore_top8": 84
+  }
+ }
+}

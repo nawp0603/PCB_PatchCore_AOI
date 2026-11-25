@@ -1,0 +1,28 @@
+{
+  "design": "G",
+  "P_REVIEW_SCORE": 1.3,
+  "variant": "global",
+  "norm": 0.37412652373313904,
+  "dim": 256,
+  "memory_captures": [
+    "G_00_v0_c01",
+    "G_00_v0_c02",
+    "G_00_v0_c03",
+    "G_00_v0_c04",
+    "G_00_v0_c05",
+    "G_00_v0_c06",
+    "G_00_v0_c07",
+    "G_00_v0_c08",
+    "G_01_v0_c01",
+    "G_01_v0_c02",
+    "G_01_v0_c03",
+    "G_01_v0_c04",
+    "G_01_v0_c05",
+    "G_01_v0_c06",
+    "G_01_v0_c07",
+    "G_01_v0_c08"
+  ],
+  "skipped_not_aligned": [],
+  "reference_profile": "assets/branch_r_profiles/G",
+  "backbone": "WideResNet-50-2 ImageNet, layer2+layer3"
+}

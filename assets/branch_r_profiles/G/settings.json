@@ -1,0 +1,22 @@
+{
+  "rule": "RECAPTURE if seed > max(reserve seed)*1.5",
+  "threshold": 10.793167288818674,
+  "margin": 1.5,
+  "design": "G",
+  "template_board": "G_00",
+  "anchor": "G_00_v0_c01",
+  "tolerance_sources": [
+    "G_00_v0_c02",
+    "G_00_v0_c03",
+    "G_00_v0_c04",
+    "G_00_v0_c05",
+    "G_00_v0_c06",
+    "G_00_v0_c07"
+  ],
+  "source_images": [
+    "G_00_v0_c08",
+    "G_00_v0_c09",
+    "G_00_v0_c10"
+  ],
+  "scope_fraction": 0.2871
+}

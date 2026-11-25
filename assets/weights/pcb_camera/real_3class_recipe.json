@@ -1,0 +1,22 @@
+{
+  "recipe": {
+    "imgsz": 640,
+    "epochs": 60,
+    "patience": 60,
+    "batch": 16,
+    "optimizer": "AdamW",
+    "lr0": 0.001,
+    "scale": 0.25,
+    "hsv_h": 0.01,
+    "flipud": 0.5,
+    "close_mosaic": 10,
+    "seed": 0,
+    "plots": false
+  },
+  "weights": "yolo11n.pt",
+  "new_head": true,
+  "ultralytics": "8.4.182",
+  "data": "D:\\FPTU\\KLTN\\PCB_DualPath_AOI\\results\\train_3class_20261122\\data_v1\\data.yaml",
+  "checkpoint_used": "last.pt",
+  "minutes": 32.2
+}
