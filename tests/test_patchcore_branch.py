@@ -21,10 +21,10 @@ def det(name="open_circuit", cls=0, conf=0.9):
     return {"bbox": [0, 0, 20, 20], "class_id": cls, "class_name": name, "conf": conf, "source": "yolo"}
 
 
-def test_strong_region_outside_yolo_is_review_never_fail():
+def test_strong_region_outside_yolo_is_review_and_never_picks():
     r = ab.combine_patchcore([], "INSPECT", [FAR], T)
     assert r["conclusion"] == "REVIEW" and "vùng lạ PatchCore" in r["reasons"]
-    assert sort_decision(r)["action"] == "operator"
+    assert sort_decision(r)["action"] == "none"
 
 
 def test_weak_region_does_not_force_review():
@@ -34,7 +34,7 @@ def test_weak_region_does_not_force_review():
 
 def test_yolo_fail_is_kept_with_patchcore_regions():
     r = ab.combine_patchcore([det()], "INSPECT", [FAR], T)
-    assert r["conclusion"] == "FAIL" and sort_decision(r)["bin"] == "FAIL"
+    assert r["conclusion"] == "FAIL" and sort_decision(r)["bin"] == "C11"
 
 
 @pytest.mark.parametrize(("items", "expected"), [([det()], "FAIL"), ([det("spur", 2)], "REWORK"),
@@ -102,6 +102,8 @@ def test_ui_helpers():
     assert ui._use_branch_b(mode("A")) and ui._patchcore_design(mode("A")) is None
     assert not ui._use_branch_b(mode("C")) and ui._patchcore_design(mode("C")) == "C"
     assert ui._patchcore_design(mode("OTHER")) is None
-    assert ui._branch_letter({"source": "patchcore"}) == "P"
+    assert ui._item_label({"source": "patchcore", "p_weak": False}) == "Vùng lạ (PatchCore)"
     assert "PatchCore" in ui._board_text("D")
-    assert set(ui._patchcore_designs()) == {"B", "C", "D", "G"}
+    # Memory banks are optional deployment assets; pipeline selection is covered
+    # above with an injected memory directory.
+    assert set(ui._patchcore_designs()).issubset({"B", "C", "D", "G"})

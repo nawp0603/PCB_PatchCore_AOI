@@ -17,12 +17,18 @@ def detection(class_id=1, name="short", conf=0.9):
 
 
 @pytest.mark.parametrize("action", ["RECAPTURE", "CONFIRM"])
-def test_capture_action_takes_priority(action):
+def test_actionable_yolo_outranks_capture_action(action):
     items = [detection()]
     result = ab.combine(items, action, [REGION])
-    assert result["verdict"] == action
+    assert result["conclusion"] == "FAIL"
     assert result["items"] == items
     assert result.get("robot_action") is None
+
+
+@pytest.mark.parametrize("action", ["RECAPTURE", "CONFIRM"])
+def test_capture_action_still_outranks_low_confidence_yolo(action):
+    result = ab.combine([detection(conf=0.25)], action, [REGION])
+    assert result["conclusion"] == action
 
 
 def test_unmatched_region_triggers_review():

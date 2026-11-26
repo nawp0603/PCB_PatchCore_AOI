@@ -12,6 +12,8 @@ Run:
 from __future__ import annotations
 
 import os
+import json
+import subprocess
 import sys
 import threading
 import time
@@ -32,6 +34,8 @@ from configs.resource_paths import (  # noqa: E402
     PROJECT_ROOT as _RP,
     LOCAL_TEMPLATES, default_weights,
 )
+from configs.station import (FAIL_SLOTS, PASS_SLOTS, SOURCE_SLOTS, TEACH_POINTS,
+                              derive_drop_slots, migrate_station_config)  # noqa: E402
 from src.core.aoi_engine import DualPathAOIEngine  # noqa: E402
 from src.core.calibrated_camera import CalibratedCameraInspection  # noqa: E402
 from src.core.real_ab_pipeline import RealABInspection  # noqa: E402
@@ -53,7 +57,7 @@ SUCCESS = "#047857"
 ERROR = "#DC2626"
 BOX_A = "#22C55E"
 BOX_B = "#F59E0B"
-BOX_R = "#A855F7"   # PatchCore regions (designs B/C/D/G)
+BOX_R = "#A855F7"
 TITLE_FONT = ("Segoe UI Semibold", 11)
 LABEL_FONT = ("Segoe UI", 10)
 MONO_FONT = ("Consolas", 10)
@@ -69,6 +73,30 @@ VERDICTS = {
     "IDLE": ("CHƯA KIỂM TRA", NEUTRAL),
 }
 DEMO_ROOT = _RP / "data" / "demo_and_test_samples"
+
+
+def _load_station_config(path: Path) -> dict:
+    """Load deployed configuration and persist the one-way station-name migration."""
+    config = json.loads(path.read_text(encoding="utf-8"))
+    changed = migrate_station_config(config)
+    changed = derive_drop_slots(config) or changed
+    if changed:
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return config
+
+
+_SAMPLE_POSES = {
+    "A11": (150.0, 180.0, -20.0, 0.0),
+    "C11": (150.0, -180.0, -20.0, 0.0),
+}
+
+
+def _sample_station_points(config: dict) -> list[str]:
+    """Reject shipped example poses before a real robot can use Automation."""
+    points = {slot: (config.get("pick_positions") or {}).get(slot) for slot in SOURCE_SLOTS}
+    points.update(config.get("bins") or {})
+    return [name for name, sample in _SAMPLE_POSES.items()
+            if tuple(points.get(name, ())) == sample]
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +115,6 @@ CLASS_LABELS = {
     "short": "Chập mạch", "spur": "Thừa thiếc/đồng",
     "mouse_bite": "Khuyết mép", "spurious_copper": "Đồng thừa",
 }
-
-
-def _branch_letter(item):
-    return {"branchb": "B", "patchcore": "P"}.get(item.get("source"), "A")
 
 
 def _item_label(item):
@@ -128,9 +152,13 @@ def _reason_text(res, verdict):
     return reason[:1].upper() + reason[1:]
 
 
-BIN_TEXT = {"FAIL": "LỖI", "PASS": "ĐẠT"}
+BIN_TEXT = {"A11": "OK (A11)", "A12": "OK (A12)", "A13": "OK (A13)",
+            "C11": "NG (C11)", "C12": "NG (C12)", "C13": "NG (C13)"}
 # The robot must start a command within RobotBridge.ttl_s (30 s); this leaves ~90 s to move.
 ROBOT_TIMEOUT_S = 120.0
+ROBOT_PICK_DELAY_MS = 5000
+AUTOMATION_POLL_MS = 250
+AUTOMATION_MAX_RECAPTURES = 2
 
 
 def _use_branch_b(app) -> bool:
@@ -140,7 +168,7 @@ def _use_branch_b(app) -> bool:
 
 
 def _patchcore_designs() -> dict:
-    """Designs with a PatchCore memory (B, C, D, G): {design: (profile dir, memory dir)}."""
+    """Designs with a PatchCore memory: {design: (profile dir, memory dir)}."""
     return patchcore_designs(PROJECT_ROOT)
 
 
@@ -171,7 +199,7 @@ def _preview_photo(frame, width, height, items):
         if box is None:
             continue
         x, y, right, bottom = (round(v * scale) for v in box)
-        branch = _branch_letter(item)
+        branch = {"branchb": "B", "patchcore": "P"}.get(item.get("source"), "A")
         color = {"B": BOX_B, "P": BOX_R}.get(branch, BOX_A)
         draw.rectangle((x, y, right, bottom), outline=color, width=3)
         # The index links even tightly grouped boxes to their full table labels.
@@ -189,7 +217,8 @@ def _preview_photo(frame, width, height, items):
 # ---------------------------------------------------------------------------
 class TkAOIApp:
     def __init__(self, root: tk.Tk, self_test: bool = False,
-                 weights_path: Path | None = None, robot_dir: Path | None = None):
+                 weights_path: Path | None = None, robot_dir: Path | None = None,
+                 robot_autostart: str | None = None):
         self.root = root
         self.self_test = self_test
         self.weights_path = weights_path
@@ -202,8 +231,27 @@ class TkAOIApp:
         self._last_inspection_frame: np.ndarray | None = None
         # Robot sorting: one command in flight, or one REVIEW waiting for the operator.
         self.robot = RobotBridge(robot_dir) if robot_dir is not None else None
+        self.robot_autostart = robot_autostart
+        self._robot_process = None
+        self._robot_state = "offline"
+        self._robot_control_job = None
+        self._robot_teach_mode = False
+        self._force_teach_on_next_start = False
+        self._last_pose_read_at = 0.0
+        self._latest_robot_pose = None
         self._robot_job: dict[str, Any] | None = None
+        self._robot_delay_job: dict[str, str] | None = None
+        self._robot_delay_after_id = None
         self._robot_review: tuple[str, str] | None = None
+        self._automation_enabled = False
+        self._automation_phase = "idle"
+        self._automation_after_id = None
+        self._automation_deadline = None
+        self._automation_recaptures = 0
+        self._automation_camera_started = False
+        self._automation_robot_started = False
+        self._automation_slot_pending = {slot: None for slot in SOURCE_SLOTS}
+        self._pass_slot_index = 0
         self.root.title("PCB AOI · Trạm kiểm tra")
         self.root.geometry("1540x880")
         self.root.configure(bg=BG)
@@ -227,6 +275,7 @@ class TkAOIApp:
 
         self._build_ui()
         self._wire_shortcuts()
+        self.root.protocol("WM_DELETE_WINDOW", self.shutdown)
 
         # Bootstrap engine + warmup on a background thread (window shows < 0.5s).
         init = self._init_calibrated_camera if self.camera_quality_mode else self._init_engine
@@ -236,6 +285,10 @@ class TkAOIApp:
         if not self.self_test:
             # Auto-scan LAN/USB3 cameras on startup without blocking UI.
             self.root.after(400, self._cam_scan_silent)
+            if self.robot is not None:
+                self.root.after(500, self._poll_robot_status)
+                if self.robot_autostart:
+                    self.root.after(750, self._start_robot)
 
     # ------------------------------------------------------------------ #
     # UI build
@@ -279,7 +332,7 @@ class TkAOIApp:
         self.lbl_model = self._badge(header, f"● Model: {model}")
         self.lbl_cam_badge = self._badge(header, "● Camera: Chưa kết nối")
         if self.robot is not None:
-            self.lbl_robot = self._badge(header, "● Robot: Sẵn sàng")
+            self.lbl_robot = self._badge(header, "● Robot: Chưa kết nối")
 
         footer = tk.Frame(self.root, height=24, bg=CARD)
         footer.pack(side="bottom", fill="x")
@@ -314,11 +367,32 @@ class TkAOIApp:
         return label
 
     def _build_left(self, parent):
-        left = tk.Frame(parent, bg=BG, width=300)
-        left.grid(row=0, column=0, sticky="ns")
-        left.pack_propagate(False)
+        left_outer = tk.Frame(parent, bg=BG, width=300)
+        left_outer.grid(row=0, column=0, sticky="ns")
+        left_outer.grid_propagate(False)
+        scrollbar = ttk.Scrollbar(left_outer, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+        canvas = tk.Canvas(left_outer, bg=BG, highlightthickness=0,
+                           yscrollcommand=scrollbar.set, width=300)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=canvas.yview)
+        left = tk.Frame(canvas, bg=BG, width=300)
+        window = canvas.create_window((0, 0), window=left, anchor="nw")
+
+        def resize_content(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(window, width=canvas.winfo_width())
+
+        left.bind("<Configure>", resize_content)
+        canvas.bind("<Configure>", resize_content)
+
+        def wheel(event):
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        canvas.bind("<MouseWheel>", wheel)
+        left.bind("<MouseWheel>", wheel)
         source = self._panel(left)
-        source.pack(fill="both", expand=True)
+        source.pack(fill="x")
         self._heading(source, "NGUỒN ẢNH")
         self.cmb_mode = tk.StringVar(value="Camera GigE")
         for mode in ("Camera GigE", "Ảnh từ file"):
@@ -352,10 +426,367 @@ class TkAOIApp:
         actions.pack(fill="x", pady=(8, 0))
         self.btn_inspect = self._btn(actions, INSPECT_TEXT, self._inspect_dispatch, accent=True)
         self.btn_inspect.pack(fill="x", ipady=8)
+        if self.robot is not None:
+            row = tk.Frame(actions, bg=BG)
+            row.pack(fill="x", pady=(8, 0))
+            row.columnconfigure((0, 1), weight=1, uniform="automation")
+            self.btn_automation = self._btn(row, "BẬT AUTOMATION", self._start_automation,
+                                            accent=True)
+            self.btn_automation.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            self.btn_automation_stop = self._btn(
+                row, "DỪNG AUTOMATION", lambda: self._stop_automation(unlock_teaching=True))
+            self.btn_automation_stop.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+            self._build_robot_controls(actions)
         if self.camera_quality_mode:
             self.btn_save_inspection = self._btn(actions, "Lưu ảnh kết quả", self._save_inspection_png)
             self.btn_save_inspection.configure(state="disabled")
             self.btn_save_inspection.pack(fill="x", pady=(8, 0))
+
+    def _build_robot_controls(self, parent) -> None:
+        panel = self._panel(parent)
+        panel.pack(fill="x", pady=(0, 8))
+        self._heading(panel, "ROBOT PHÂN LOẠI")
+        self.robot_port = tk.StringVar()
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill="x")
+        tk.Label(row, text="Cổng COM", bg=CARD, fg=MUTED).pack(side="left")
+        self.cmb_robot_port = ttk.Combobox(row, textvariable=self.robot_port, state="readonly",
+                                           width=11, values=[])
+        self.cmb_robot_port.pack(side="left", expand=True, fill="x", padx=8)
+        self._btn(row, "Quét COM", self._scan_robot_ports).pack(side="right")
+        self._scan_robot_ports()
+        self.lbl_robot_pose_inline = tk.Label(
+            panel, text="Tọa độ Dobot: chưa đọc", bg=CARD, fg=ACCENT, anchor="w", font=MONO_FONT)
+        self.lbl_robot_pose_inline.pack(fill="x", pady=(6, 0))
+        self._btn(panel, "Sao chép tọa độ", self._copy_robot_pose).pack(fill="x", pady=(4, 0))
+        self.robot_mode = tk.StringVar(value=self.robot_autostart or "sim")
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill="x")
+        for value, text in (("sim", "Giả lập"), ("real", "Dobot thật")):
+            tk.Radiobutton(row, text=text, variable=self.robot_mode, value=value,
+                           bg=CARD, fg=INK, selectcolor=BG, activebackground=NEUTRAL,
+                           activeforeground=INK).pack(side="left", expand=True, fill="x")
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill="x", pady=(8, 0))
+        row.columnconfigure((0, 1), weight=1, uniform="robot")
+        self.btn_robot_connect = self._btn(row, "Kết nối + Home", self._start_robot)
+        self.btn_robot_connect.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.btn_robot_disconnect = self._btn(row, "Ngắt robot", self._stop_robot)
+        self.btn_robot_disconnect.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        row = tk.Frame(panel, bg=CARD)
+        row.pack(fill="x", pady=(8, 0))
+        row.columnconfigure((0, 1), weight=1, uniform="robot")
+        self._btn(row, "Về Home", self._home_robot).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        stop = self._btn(row, "DỪNG KHẨN CẤP", self._emergency_stop)
+        stop.configure(bg=ERROR, fg="white")
+        stop.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self.lbl_robot_status = tk.Label(panel, text="Chưa kết nối", bg=CARD, fg=MUTED,
+                                         anchor="w", wraplength=250)
+        self.lbl_robot_status.pack(fill="x", pady=(8, 0))
+        self.teach_toggle = self._btn(panel, "▸ Dạy tọa độ", self._toggle_teach_panel)
+        self.teach_toggle.pack(fill="x", pady=(8, 0))
+        teach = tk.Frame(panel, bg=CARD)
+        self.teach_panel = teach
+        self._heading(teach, "DẠY TỌA ĐỘ")
+        self.teach_point = tk.StringVar(value="B11")
+        row = tk.Frame(teach, bg=CARD)
+        row.pack(fill="x")
+        tk.Label(row, text="Lưu điểm", bg=CARD, fg=MUTED).pack(side="left")
+        ttk.Combobox(row, textvariable=self.teach_point, state="readonly", width=14,
+                      values=("Home", "B11", "A11", "C11", "C12")).pack(
+                         side="left", expand=True, fill="x", padx=(8, 0))
+        self.teach_fields = []
+        row = tk.Frame(teach, bg=CARD)
+        row.pack(fill="x", pady=(8, 0))
+        for name in ("X", "Y", "Z", "R"):
+            cell = tk.Frame(row, bg=CARD)
+            cell.pack(side="left", expand=True, fill="x", padx=(0, 4))
+            tk.Label(cell, text=name, bg=CARD, fg=MUTED).pack(anchor="w")
+            field = tk.Entry(cell, bg=BG, fg=INK, insertbackground=INK, width=7)
+            field.insert(0, "0.0")
+            field.pack(fill="x")
+            self.teach_fields.append(field)
+        self.lbl_current_pose = tk.Label(teach, text="Tọa độ hiện tại: chưa đọc", bg=CARD,
+                                         fg=MUTED, anchor="w", font=MONO_FONT)
+        self.lbl_current_pose.pack(fill="x", pady=(6, 0))
+        row = tk.Frame(teach, bg=CARD)
+        row.pack(fill="x", pady=(8, 0))
+        for text, command in (("Đọc tọa độ", self._read_robot_pose),
+                              ("Đi tới", self._move_to_teach_pose),
+                              ("Lưu điểm", self._save_teach_pose)):
+            self._btn(row, text, command).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        self._btn(teach, "HỌC TỌA ĐỘ HIỆN TẠI",
+                  self._save_current_robot_pose).pack(fill="x", pady=(6, 0))
+        self.teach_point.trace_add("write", lambda *_: self._load_teach_point())
+        self._load_teach_point()
+        self.teach_live = tk.IntVar(value=0)
+        tk.Checkbutton(teach, text="Theo dõi tọa độ", variable=self.teach_live,
+                       command=self._toggle_teach_live, bg=CARD, fg=INK, selectcolor=BG,
+                       activebackground=NEUTRAL, activeforeground=INK, anchor="w").pack(
+                           fill="x", pady=(8, 0))
+        self._btn(teach, "Xác nhận trạm đã hiệu chuẩn", self._confirm_station_calibrated).pack(
+            fill="x", pady=(6, 0))
+        self.lbl_saved_points = tk.Label(teach, text="", bg=CARD, fg=MUTED, anchor="w",
+                                         justify="left", font=("Consolas", 8))
+        self.lbl_saved_points.pack(fill="x", pady=(8, 0))
+        self._refresh_taught_points()
+
+    def _toggle_teach_panel(self) -> None:
+        if self.teach_panel.winfo_manager():
+            self.teach_panel.pack_forget()
+            self.teach_toggle.config(text="▸ Dạy tọa độ")
+        else:
+            self.teach_panel.pack(fill="x", pady=(8, 0))
+            self.teach_toggle.config(text="▾ Dạy tọa độ")
+
+    def _open_pose_window(self) -> None:
+        window = getattr(self, "_pose_window", None)
+        if window is not None and window.winfo_exists():
+            window.deiconify()
+            window.lift()
+            self._read_robot_pose()
+            return
+        window = tk.Toplevel(self.root)
+        window.title("Dobot · Tọa độ")
+        window.configure(bg=CARD)
+        window.resizable(False, False)
+        window.transient(self.root)
+        self._pose_window = window
+        frame = tk.Frame(window, bg=CARD, padx=16, pady=16)
+        frame.pack(fill="both", expand=True)
+        tk.Label(frame, text="TỌA ĐỘ HIỆN TẠI", bg=CARD, fg=INK,
+                 font=TITLE_FONT).pack(anchor="w")
+        self.lbl_pose_window = tk.Label(frame, text="Chưa đọc", bg=CARD, fg=ACCENT,
+                                        font=("Consolas", 13, "bold"), anchor="w")
+        self.lbl_pose_window.pack(fill="x", pady=(8, 16))
+        self._btn(frame, "Đọc tọa độ từ Dobot", self._read_robot_pose).pack(fill="x")
+        tk.Label(frame, text="ĐIỂM ĐÃ LƯU", bg=CARD, fg=INK,
+                 font=TITLE_FONT).pack(anchor="w", pady=(16, 4))
+        self.lbl_saved_points_window = tk.Label(frame, text="", bg=CARD, fg=MUTED,
+                                                 justify="left", anchor="w", font=("Consolas", 10))
+        self.lbl_saved_points_window.pack(fill="x")
+        self._refresh_taught_points()
+        if self._robot_state == "ready":
+            self._read_robot_pose()
+
+    def _scan_robot_ports(self) -> None:
+        try:
+            from serial.tools import list_ports
+            ports = [(port.device, port.description) for port in list_ports.comports()]
+        except Exception as exc:
+            ports = []
+            detail = f"Không quét được COM: {exc}"
+        else:
+            detail = "Không tìm thấy cổng COM." if not ports else " · ".join(
+                f"{device}: {description}" for device, description in ports)
+        values = [device for device, _ in ports]
+        self.cmb_robot_port.configure(values=values)
+        configured = ""
+        try:
+            configured = str(_load_station_config(
+                PROJECT_ROOT / "configs" / "robot_positions.json").get("port", ""))
+        except (OSError, ValueError):
+            pass
+        selected = self.robot_port.get()
+        if selected not in values:
+            selected = configured if configured in values else (values[0] if values else "")
+        self.robot_port.set(selected)
+        if hasattr(self, "lbl_robot_status"):
+            self.lbl_robot_status.config(text=detail)
+
+    def _teach_pose(self) -> list[float] | None:
+        try:
+            return [float(field.get()) for field in self.teach_fields]
+        except ValueError:
+            messagebox.showerror("Dạy tọa độ", "X, Y, Z, R phải là các số hợp lệ.")
+            return None
+
+    def _load_teach_point(self) -> None:
+        point = {"Home": "home"}.get(self.teach_point.get(), self.teach_point.get())
+        try:
+            config = _load_station_config(PROJECT_ROOT / "configs" / "robot_positions.json")
+            pose = (config[point] if point == "home" else config["pick_positions"][point]
+                    if point in SOURCE_SLOTS else config["bins"][point])
+        except (OSError, ValueError, KeyError):
+            return
+        self._set_teach_pose(pose)
+
+    def _set_teach_pose(self, pose) -> None:
+        for field, value in zip(self.teach_fields, pose):
+            field.delete(0, "end")
+            field.insert(0, f"{float(value):.2f}")
+
+    def _set_current_robot_pose(self, pose) -> None:
+        if len(pose) != 4:
+            return
+        self._latest_robot_pose = [float(value) for value in pose]
+        if hasattr(self, "lbl_current_pose") and len(pose) == 4:
+            self.lbl_current_pose.config(
+                text="Tọa độ hiện tại: " + ", ".join(f"{float(value):.2f}" for value in pose))
+        if hasattr(self, "lbl_robot_pose_inline") and len(pose) == 4:
+            self.lbl_robot_pose_inline.config(
+                text="Tọa độ Dobot: X={:.1f}  Y={:.1f}\nZ={:.1f}  R={:.1f}".format(*map(float, pose)))
+        if hasattr(self, "lbl_pose_window") and len(pose) == 4:
+            self.lbl_pose_window.config(
+                text="X={:.2f}  Y={:.2f}  Z={:.2f}  R={:.2f}".format(*map(float, pose)))
+
+    def _read_pose_into_teach_fields(self, pose) -> None:
+        self._set_current_robot_pose(pose)
+        self._set_teach_pose(pose)
+
+    def _copy_robot_pose(self) -> None:
+        pose = self._latest_robot_pose
+        if pose is None:
+            self._set_status("Chưa có tọa độ Dobot để sao chép.")
+            return
+        text = "[" + ", ".join(f"{value:.2f}" for value in pose) + "]"
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self._set_status(f"Đã sao chép tọa độ: {text}")
+
+    def _refresh_taught_points(self) -> None:
+        try:
+            config = _load_station_config(PROJECT_ROOT / "configs" / "robot_positions.json")
+            points = [("Home", config["home"]),
+                       *[(name, config["pick_positions"][name]) for name in SOURCE_SLOTS],
+                       *[(name, config["bins"][name]) for name in ("A11", "C11", "C12")]]
+        except (OSError, ValueError, KeyError):
+            return
+        text = "Điểm đã lưu:\n" + "\n".join(
+            f"{name}: " + ", ".join(f"{float(value):.1f}" for value in pose)
+            for name, pose in points)
+        self.lbl_saved_points.config(text=text)
+        if hasattr(self, "lbl_saved_points_window"):
+            self.lbl_saved_points_window.config(text=text.replace("Điểm đã lưu:\n", ""))
+
+    def _read_robot_pose(self) -> None:
+        self._send_robot_control("read_pose", {}, self._read_pose_into_teach_fields)
+
+    def _toggle_teach_live(self) -> None:
+        if self.teach_live.get():
+            self._poll_teach_pose()
+
+    def _poll_teach_pose(self) -> None:
+        if not self.teach_live.get():
+            return
+        if self._robot_state == "ready" and self._robot_control_job is None:
+            self._send_robot_control("read_pose", {}, self._set_current_robot_pose, quiet=True)
+        self.root.after(500, self._poll_teach_pose)
+
+    def _move_to_teach_pose(self) -> None:
+        pose = self._teach_pose()
+        if pose is None:
+            return
+        if not messagebox.askyesno(
+                "Di chuyển robot",
+                f"Robot sẽ di chuyển đến X={pose[0]:.2f}, Y={pose[1]:.2f}, "
+                f"Z={pose[2]:.2f}, R={pose[3]:.2f}.\nĐảm bảo vùng hoạt động trống."):
+            return
+        self._send_robot_control("move", {"pose": pose}, self._set_current_robot_pose)
+
+    def _save_teach_pose(self) -> None:
+        pose = self._teach_pose()
+        if pose is None:
+            return
+        point = {"Home": "home"}.get(self.teach_point.get(), self.teach_point.get())
+        self._persist_teach_pose(point, pose)
+
+    def _save_current_robot_pose(self) -> None:
+        if self._robot_state != "ready":
+            messagebox.showwarning("Dạy trực tiếp", "Robot chưa sẵn sàng để đọc tọa độ hiện tại.")
+            return
+        point = {"Home": "home"}.get(self.teach_point.get(), self.teach_point.get())
+        def save_current(pose) -> None:
+            self._set_current_robot_pose(pose)
+            self._set_teach_pose(pose)
+            self._persist_teach_pose(point, pose)
+
+        self._send_robot_control("read_pose", {}, save_current)
+
+    def _persist_teach_pose(self, point: str, pose: list[float]) -> None:
+        path = PROJECT_ROOT / "configs" / "robot_positions.json"
+        try:
+            config = _load_station_config(path)
+            if point == "home":
+                config[point] = pose
+            elif point in SOURCE_SLOTS:
+                config["pick_positions"][point] = pose
+            else:
+                config["bins"][point] = pose
+            derive_drop_slots(config)
+            # Any changed taught position requires an explicit production re-verification.
+            config["station_calibrated"] = False
+            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError, KeyError) as exc:
+            messagebox.showerror("Dạy tọa độ", f"Không lưu được tọa độ: {exc}")
+            return
+        self._refresh_taught_points()
+        self._set_status(f"Đã lưu điểm {point}. Ngắt và kết nối lại robot để dùng tọa độ mới.")
+
+    def _confirm_station_calibrated(self) -> None:
+        path = PROJECT_ROOT / "configs" / "robot_positions.json"
+        try:
+            config = _load_station_config(path)
+            derive_drop_slots(config)
+            points = [config["home"], *[config["pick_positions"][slot] for slot in SOURCE_SLOTS],
+                        *[config["bins"][name] for name in ("A11", "C11", "C12")]]
+            if any(not isinstance(point, list) or len(point) != 4 for point in points):
+                raise ValueError("Thiếu một hoặc nhiều tọa độ Home, B11, A11, C11, C12.")
+        except (OSError, ValueError, KeyError) as exc:
+            messagebox.showerror("Hiệu chuẩn trạm", f"Không thể xác nhận: {exc}")
+            return
+        if not messagebox.askyesno(
+                "Xác nhận hiệu chuẩn",
+                "Bạn xác nhận đã kiểm tra Home, B11, A11, C11, C12; vùng robot trống "
+                "và E-stop vật lý sẵn sàng?\n\n"
+                "Xác nhận sẽ cho phép Automation điều khiển Dobot thật để gắp PCB."):
+            return
+        config["station_calibrated"] = True
+        try:
+            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("Hiệu chuẩn trạm", str(exc))
+            return
+        self._set_status("Đã xác nhận hiệu chuẩn. Ngắt và kết nối lại robot trước khi bật Automation.")
+
+    def _send_robot_control(self, action: str, payload: dict, on_done, quiet: bool = False) -> None:
+        if self.robot is None or self._robot_state != "ready":
+            self._set_status("Robot chưa sẵn sàng; không thể dạy tọa độ.")
+            return
+        if self._robot_control_job is not None:
+            self._set_status("Đang chờ lệnh dạy tọa độ trước hoàn thành.")
+            return
+        try:
+            control_id = self.robot.send_control(action, payload)
+        except OSError as exc:
+            messagebox.showerror("Dạy tọa độ", f"Không gửi được lệnh tới robot: {exc}")
+            return
+        self._robot_control_job = {"id": control_id, "on_done": on_done, "quiet": quiet,
+                                   "deadline": time.monotonic() + ROBOT_TIMEOUT_S}
+        if not quiet:
+            self._set_robot_badge("đang dạy tọa độ")
+        self.root.after(250, self._poll_robot_control)
+
+    def _poll_robot_control(self) -> None:
+        job = self._robot_control_job
+        if job is None:
+            return
+        try:
+            ack = self.robot.poll_control(job["id"])
+        except (OSError, ValueError):
+            ack = None
+        if ack is None and time.monotonic() < job["deadline"]:
+            self.root.after(250, self._poll_robot_control)
+            return
+        self._robot_control_job = None
+        if ack is not None and ack.get("status") == "done":
+            job["on_done"](ack.get("result", {}).get("pose", ()))
+            if not job["quiet"]:
+                self._set_status("Đã hoàn thành lệnh dạy tọa độ.")
+            return
+        error = "không phản hồi" if ack is None else ack.get("error", ack.get("status", "lỗi"))
+        self._set_robot_badge("lỗi")
+        messagebox.showwarning("Dạy tọa độ", f"Robot {error}.")
 
     def _build_camera_controls(self, parent):
         row = tk.Frame(parent, bg=CARD)
@@ -774,6 +1205,8 @@ class TkAOIApp:
             messagebox.showerror("Kết nối camera", str(exc))
 
     def _cam_disconnect(self) -> None:
+        if getattr(self, "_automation_enabled", False):
+            self._stop_automation("Automation dừng: camera đã được ngắt.")
         if self.camera_quality_mode and (self._busy or self._grabbing_cam):
             self._set_status("Chờ lần chụp hiện tại xong rồi mới ngắt kết nối.")
             return
@@ -907,6 +1340,220 @@ class TkAOIApp:
             context = self._real_ab_context if self.weights_path is not None else None
             threading.Thread(target=self._inspect_camera, args=(context,), daemon=True).start()
 
+    def _start_automation(self) -> None:
+        if getattr(self, "_automation_enabled", False):
+            return
+        if self.robot is None:
+            messagebox.showwarning("Automation", "Khởi động UI với tùy chọn robot trước khi chạy Automation.")
+            return
+        if self.weights_path is None:
+            messagebox.showwarning("Automation", "Automation yêu cầu mô hình nhận diện đã được chọn.")
+            return
+        if self.camera_quality_mode:
+            messagebox.showwarning("Automation", "Chế độ camera quality chưa hỗ trợ phân loại và gắp tự động.")
+            return
+        if self.robot_mode.get() == "real":
+            config_path = PROJECT_ROOT / "configs" / "robot_positions.json"
+            try:
+                config = _load_station_config(config_path)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("Automation", f"Không đọc được cấu hình robot: {exc}")
+                return
+            if not config.get("station_calibrated", False):
+                messagebox.showwarning(
+                    "Automation chưa thể chạy",
+                    "Trạm Dobot chưa hiệu chuẩn nên robot đang ở chế độ dạy tọa độ và bị khóa gắp.\n\n"
+                    "Hãy dạy và kiểm tra Home, B, A, C11, C12, C13; sau đó xác nhận các tọa độ "
+                    "và đặt station_calibrated thành true trước khi chạy Automation.",
+                )
+                return
+            sample_points = _sample_station_points(config)
+            if sample_points:
+                messagebox.showwarning(
+                    "Automation chưa thể chạy",
+                    "Các điểm sau vẫn là tọa độ mẫu, chưa được phép gắp thật: "
+                    + ", ".join(sample_points) + ".\n\n"
+                    "Chọn từng điểm trong Dạy tọa độ, đặt đầu hút đúng vị trí và bấm "
+                    "HỌC TỌA ĐỘ HIỆN TẠI.",
+                )
+                return
+        if self._robot_teach_mode:
+            if messagebox.askyesno(
+                    "Chuyển sang chạy sản xuất",
+                    "Tọa độ đã hiệu chuẩn. Automation sẽ dừng worker dạy tọa độ, sau đó khởi động "
+                    "lại robot ở chế độ gắp thật và về Home. Tiếp tục?"):
+                self._stop_robot()
+                self.root.after(1000, self._start_automation)
+            return
+        self._automation_enabled = True
+        self._automation_phase = "chờ bộ nhận diện"
+        self._automation_deadline = time.monotonic() + 180.0
+        self._automation_recaptures = 0
+        self._automation_slot_pending = {slot: None for slot in SOURCE_SLOTS}
+        self._pass_slot_index = 0
+        self._automation_camera_started = False
+        self._automation_robot_started = False
+        self.cmb_mode.set("Camera GigE")
+        self._switch_mode()
+        self._set_status("Automation đã bật. Đang chuẩn bị camera, robot và bộ nhận diện.")
+        self._automation_schedule(0)
+
+    def _stop_automation(self, reason: str = "Automation đã dừng.", unlock_teaching: bool = False) -> None:
+        if self._automation_after_id is not None:
+            try:
+                self.root.after_cancel(self._automation_after_id)
+            except Exception:
+                pass
+        self._automation_after_id = None
+        if getattr(self, "_robot_delay_after_id", None) is not None:
+            try:
+                self.root.after_cancel(self._robot_delay_after_id)
+            except Exception:
+                pass
+        self._robot_delay_after_id = None
+        self._robot_delay_job = None
+        self._automation_enabled = False
+        self._automation_phase = "idle"
+        self._automation_deadline = None
+        self._set_status(reason)
+        if unlock_teaching:
+            self._unlock_teaching_after_automation()
+
+    def _unlock_teaching_after_automation(self) -> None:
+        """Return a real station to teaching mode after an operator stops Automation."""
+        if (not hasattr(self, "robot_mode") or self.robot_mode.get() != "real"
+                or self._robot_teach_mode):
+            return
+        path = PROJECT_ROOT / "configs" / "robot_positions.json"
+        try:
+            config = _load_station_config(path)
+            config["station_calibrated"] = False
+            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Dạy tọa độ", f"Không mở được chế độ dạy: {exc}")
+            return
+        self._force_teach_on_next_start = True
+        self._stop_robot()
+        self._set_status("Automation đã dừng. Đang mở lại robot ở chế độ dạy tọa độ.")
+        self.root.after(1000, self._start_robot)
+
+    def _automation_schedule(self, delay_ms: int = AUTOMATION_POLL_MS) -> None:
+        if self._automation_enabled and self._automation_after_id is None:
+            self._automation_after_id = self.root.after(delay_ms, self._automation_tick)
+
+    def _automation_waiting_timed_out(self) -> bool:
+        return self._automation_deadline is not None and time.monotonic() >= self._automation_deadline
+
+    def _automation_tick(self) -> None:
+        self._automation_after_id = None
+        if not self._automation_enabled:
+            return
+        if self.engine_error:
+            self._stop_automation("Automation dừng: bộ nhận diện gặp lỗi.")
+            return
+        if not self.engine_ready:
+            if self._automation_waiting_timed_out():
+                self._stop_automation("Automation dừng: bộ nhận diện không sẵn sàng.")
+                return
+            self._automation_schedule()
+            return
+        if not self.cam_connected:
+            if not self._automation_camera_started:
+                self._automation_camera_started = True
+                self._automation_phase = "đang kết nối camera"
+                self._automation_deadline = time.monotonic() + 30.0
+                self._set_status("Automation: đang kết nối camera.")
+                self._cam_connect()
+            if not self.cam_connected:
+                if self._automation_waiting_timed_out():
+                    self._stop_automation("Automation dừng: không kết nối được camera.")
+                    return
+                self._automation_schedule()
+                return
+        if self._robot_teach_mode:
+            self._stop_automation("Automation dừng: robot đang ở chế độ dạy tọa độ.")
+            return
+        if self._robot_state != "ready":
+            if not self._automation_robot_started:
+                self._automation_robot_started = True
+                self._automation_phase = "đang kết nối robot"
+                self._automation_deadline = time.monotonic() + 60.0
+                self._set_status("Automation: đang kết nối robot và về Home.")
+                self._start_robot()
+            if self._robot_state == "error" or self._automation_waiting_timed_out():
+                self._stop_automation("Automation dừng: robot không sẵn sàng.")
+                return
+            self._automation_schedule()
+            return
+        if self._robot_delay_job is not None or self._robot_job is not None:
+            self._automation_phase = "chờ robot gắp"
+            self._automation_schedule()
+            return
+        if self._robot_review is not None:
+            self._stop_automation("Automation tạm dừng: cần người vận hành chọn khay cho bo hiện tại.")
+            return
+        if self._busy or self._grabbing_cam:
+            self._automation_schedule()
+            return
+        self._automation_phase = "đang nhận diện"
+        self._automation_capture_slot()
+
+    def _automation_capture_slot(self) -> None:
+        self._grabbing_cam = True
+        self._set_busy(True)
+        self._set_status("Automation: chụp PCB tại B11.")
+
+        def work():
+            try:
+                frame = self.cam_mgr.grab_frame_bgr(timeout_ms=2500)
+                self.root.after(0, lambda: self._automation_capture_ready(frame))
+            except Exception as exc:
+                error = str(exc)
+                self.root.after(0, lambda error=error: self._automation_capture_error(error))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _automation_capture_error(self, error: str) -> None:
+        self._finish_calibrated_capture()
+        self._inspect_error(error)
+
+    def _automation_capture_ready(self, frame: np.ndarray) -> None:
+        self._finish_calibrated_capture()
+        if not self._automation_enabled:
+            return
+        self._current_frame_bgr = frame
+        self._show_raw(frame)
+        self._run_inspect(frame, source="GigE camera:B11")
+
+    def _automation_after_result(self, res: dict[str, Any], source: str = "") -> None:
+        if not getattr(self, "_automation_enabled", False):
+            return
+        conclusion = res.get("conclusion", "")
+        slot = source.rsplit(":", 1)[-1] if source.endswith(tuple(f":{name}" for name in SOURCE_SLOTS)) else None
+        if sort_decision(res)["action"] == "pick":
+            self._automation_recaptures = 0
+            if slot:
+                self._automation_slot_pending[slot] = None
+            self._automation_phase = "chờ robot gắp"
+            self._automation_schedule()
+            return
+        if conclusion in ("CONFIRM", "RECAPTURE", "REWORK"):
+            self._automation_recaptures += 1
+            if self._automation_recaptures > AUTOMATION_MAX_RECAPTURES:
+                self._stop_automation("Automation tạm dừng: chụp lại quá nhiều lần. Kiểm tra PCB/camera.")
+                return
+            self._automation_phase = "chụp lại"
+            self._set_status(f"Automation: chụp lại PCB ({self._automation_recaptures}/{AUTOMATION_MAX_RECAPTURES}).")
+            self._automation_schedule(500)
+            return
+        self._stop_automation(f"Automation tạm dừng: AOI trả {conclusion}; cần người vận hành kiểm tra.")
+        messagebox.showwarning(
+            "Automation tạm dừng",
+            f"AOI trả kết luận {conclusion}, chưa thể tự chọn khay gắp.\n\n"
+            "OK sẽ vào khay A; FAIL lớp 0/1/2 sẽ vào C11/C12/C13. "
+            "REVIEW/CONFIRM/RECAPTURE không gắp để tránh phân loại nhầm.",
+        )
+
     def _inspect_calibrated_camera(self) -> None:
         try:
             frame = self.cam_mgr.grab_frame_bgr(timeout_ms=2500)
@@ -993,12 +1640,13 @@ class TkAOIApp:
             return
         self._set_busy(True)
         if self.weights_path is not None:
+            slot = source.rsplit(":", 1)[-1] if source.endswith(tuple(f":{name}" for name in SOURCE_SLOTS)) else None
             source_key = "GigE camera" if source == "GigE camera" else id(img)
-            if source_key != self._real_ab_source:
+            if slot is None and source_key != self._real_ab_source:
                 self._reset_pending()
                 self._real_ab_source = source_key
             context = self._real_ab_context
-            pending = self._pending_camera_regions
+            pending = self._automation_slot_pending[slot] if slot else self._pending_camera_regions
             use_b = _use_branch_b(self)
             patchcore_design = _patchcore_design(self)
 
@@ -1006,9 +1654,13 @@ class TkAOIApp:
             if self.weights_path is not None:
                 if context != self._real_ab_context:
                     return
-                self._pending_camera_regions = res["b_pending"]
+                if slot:
+                    self._automation_slot_pending[slot] = res["b_pending"]
+                else:
+                    self._pending_camera_regions = res["b_pending"]
             self._show_result(res, source)
             self._after_result(res, source)
+            self._automation_after_result(res, source)
             self.nb.select(0)
 
         def work():
@@ -1031,6 +1683,8 @@ class TkAOIApp:
         threading.Thread(target=work, daemon=True).start()
 
     def _inspect_error(self, err: str) -> None:
+        if getattr(self, "_automation_enabled", False):
+            self._stop_automation(f"Automation dừng: không nhận diện được PCB ({err}).")
         title, color = VERDICTS["UNAVAILABLE"]
         self.banner.config(bg=color)
         self.lbl_verdict.config(text=title, fg="white", bg=color)
@@ -1059,11 +1713,10 @@ class TkAOIApp:
                          reverse=True)
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(ordered, 1):
-            branch = _branch_letter(item)
+            branch = {"branchb": "B", "patchcore": "P"}.get(item.get("source"), "A")
             conf = item.get("conf")
             self.tree.insert("", "end", values=(
                 index, _item_label(item), "—" if conf is None else f"{conf:.2f}", branch))
-        # PatchCore regions below the review score are listed but are not defects
         weak = sum(1 for item in ordered if item.get("p_weak"))
         self.lbl_defects.config(text=f"LỖI PHÁT HIỆN ({len(ordered) - weak})"
                                 + (f" · {weak} vùng yếu" if weak else ""))
@@ -1124,13 +1777,158 @@ class TkAOIApp:
     # ------------------------------------------------------------------ #
     # Robot sorting (scripts/robot_worker.py reads robot_io/outbox).
     # ------------------------------------------------------------------ #
+    def _start_robot(self) -> None:
+        if self._robot_process is not None and self._robot_process.poll() is None:
+            self._set_status("Robot đang chạy.")
+            return
+        try:
+            existing_status = self.robot.status()
+        except (OSError, ValueError):
+            existing_status = None
+        if (existing_status is not None
+                and time.time() - existing_status.get("updated", 0) <= 5.0
+                and existing_status.get("status") in ("connecting", "ready", "busy")):
+            self._set_robot_state(existing_status["status"], existing_status.get("detail", ""))
+            messagebox.showwarning(
+                "Robot đã chạy",
+                "Một worker robot khác đang hoạt động. Không khởi động worker thứ hai trên cùng cổng COM.")
+            return
+        mode = self.robot_mode.get()
+        config_path = PROJECT_ROOT / "configs" / "robot_positions.json"
+        teach_mode = False
+        if mode == "real":
+            port = self.robot_port.get().strip()
+            if not port:
+                messagebox.showwarning("Robot", "Hãy quét và chọn cổng COM của Dobot.")
+                return
+            try:
+                config = _load_station_config(config_path)
+            except (OSError, ValueError) as exc:
+                messagebox.showerror("Robot", f"Không đọc được cấu hình robot: {exc}")
+                return
+            if not teach_mode and not config.get("station_calibrated", False):
+                teach_mode = self._force_teach_on_next_start
+                self._force_teach_on_next_start = False
+                if not teach_mode:
+                    teach_mode = messagebox.askyesno(
+                        "Chế độ dạy tọa độ",
+                        "Trạm chưa hiệu chuẩn. UI sẽ chỉ kết nối để đọc/di chuyển dạy tọa độ; "
+                        "robot không về HOME và không gắp PCB.\nTiếp tục?")
+                    if not teach_mode:
+                        return
+            elif not teach_mode and not messagebox.askyesno(
+                    "Kết nối Dobot",
+                    "Robot sẽ kết nối qua cổng đã cấu hình và di chuyển về HOME.\n"
+                    "Đảm bảo vùng hoạt động trống và nút dừng khẩn cấp sẵn sàng."):
+                return
+        command = [sys.executable, str(PROJECT_ROOT / "scripts" / "robot_worker.py"),
+                   "--io", str(self.robot.root)]
+        if mode == "sim":
+            command.append("--sim")
+        else:
+            command.extend(("--port", port))
+            if teach_mode:
+                command.append("--teach")
+        try:
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+            self._robot_process = subprocess.Popen(command, cwd=PROJECT_ROOT, creationflags=flags)
+        except OSError as exc:
+            self._set_robot_state("error", f"Không khởi động được worker: {exc}")
+            return
+        self._robot_teach_mode = teach_mode
+        self._set_robot_state("connecting", "Đang kết nối chế độ dạy tọa độ..." if teach_mode
+                              else "Đang kết nối robot và về HOME...")
+
+    def _home_robot(self) -> None:
+        if not messagebox.askyesno("Về Home", "Robot sẽ di chuyển về điểm Home đã lưu. Tiếp tục?"):
+            return
+        self._send_robot_control("home", {}, self._set_current_robot_pose)
+
+    def _emergency_stop(self) -> None:
+        if getattr(self, "_automation_enabled", False):
+            self._stop_automation("Automation dừng khẩn cấp.")
+        port = self.robot_port.get().strip() if hasattr(self, "robot_port") else ""
+        process = self._robot_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        self._robot_process = None
+        self._robot_teach_mode = False
+        if not port:
+            self._set_robot_state("error", "Worker đã dừng; không có cổng COM để gửi lệnh stop.")
+            return
+        try:
+            subprocess.Popen([sys.executable, str(PROJECT_ROOT / "scripts" / "robot_stop.py"),
+                              "--port", port], cwd=PROJECT_ROOT)
+        except OSError as exc:
+            self._set_robot_state("error", f"Worker đã dừng, nhưng không gửi được stop: {exc}")
+            return
+        self._set_robot_state("error", "Đã gửi dừng phần mềm. Dùng E-stop vật lý nếu robot còn di chuyển.")
+
+    def _stop_robot(self) -> None:
+        if getattr(self, "_automation_enabled", False):
+            self._stop_automation("Automation dừng: robot đã được ngắt.")
+        process = self._robot_process
+        if process is None or process.poll() is not None:
+            self._set_robot_state("offline", "Robot chưa được UI này khởi động.")
+            return
+        process.terminate()
+        self._robot_process = None
+        self._robot_teach_mode = False
+        self._set_robot_state("offline", "Đã dừng worker robot. Kiểm tra tay robot trước khi thao tác lại.")
+
+    def _set_robot_state(self, state: str, detail: str = "") -> None:
+        self._robot_state = state
+        labels = {
+            "connecting": "đang kết nối",
+            "ready": "Sẵn sàng",
+            "busy": "đang gắp",
+            "error": "lỗi",
+            "offline": "chưa kết nối",
+        }
+        text = labels.get(state, state)
+        self._set_robot_badge(text)
+        if hasattr(self, "lbl_robot_status"):
+            self.lbl_robot_status.config(text=detail or text)
+
+    def _poll_robot_status(self) -> None:
+        if self.robot is None:
+            return
+        try:
+            status = self.robot.status()
+        except (OSError, ValueError):
+            status = None
+        if status is not None and time.time() - status.get("updated", 0) <= 5.0:
+            self._set_robot_state(status.get("status", "offline"), status.get("detail", ""))
+        elif self._robot_process is not None and self._robot_process.poll() is not None:
+            self._robot_process = None
+            self._set_robot_state("error", "Worker robot đã dừng. Xem terminal để biết lỗi.")
+        elif self._robot_state in ("ready", "busy", "connecting"):
+            self._set_robot_state("offline", "Không nhận được heartbeat từ worker robot.")
+        self.root.after(500, self._poll_robot_status)
+
+    def shutdown(self) -> None:
+        self._stop_automation("Automation dừng: đang đóng ứng dụng.")
+        self._cam_disconnect()
+        self._emergency_stop()
+        self.root.destroy()
+
     def _switch_board(self) -> None:
         self._reset_pending()
         self._set_status("Loại bo · " + _board_text(self.board_mode.get()))
 
     def _robot_blocking(self) -> bool:
+        if getattr(self, "_robot_delay_job", None) is not None:
+            self._set_status("Đã có kết luận; chờ 5 giây trước khi robot gắp.")
+            return True
         if getattr(self, "_robot_job", None) is not None:
             self._set_status("Chờ robot gắp xong rồi mới kiểm tra bo tiếp theo.")
+            return True
+        if getattr(self, "_robot_control_job", None) is not None:
+            self._set_status("Chờ lệnh dạy tọa độ hoàn thành rồi mới kiểm tra bo tiếp theo.")
             return True
         if getattr(self, "_robot_review", None) is not None:
             self._set_status("Chọn khay Lỗi / Đạt / Không gắp cho bo hiện tại trước.")
@@ -1145,13 +1943,43 @@ class TkAOIApp:
             return
         decision = sort_decision(res)
         if decision["action"] == "pick":
-            self._robot_send(decision["bin"], res["conclusion"], "auto", source)
-        elif decision["action"] == "operator":
-            self._robot_review = (res["conclusion"], source)
-            self.op_frame.pack(fill="x")
-            self._set_robot_badge("chờ người vận hành")
+            source_slot = source.rsplit(":", 1)[-1] if source.endswith(tuple(f":{name}" for name in SOURCE_SLOTS)) else "B11"
+            if decision["bin"] == "A11" and getattr(self, "_automation_enabled", False):
+                index = getattr(self, "_pass_slot_index", 0)
+                if index >= len(PASS_SLOTS):
+                    self._stop_automation("Automation dừng: khay A đã đầy. Lấy PCB ra rồi chạy lại.")
+                    return
+                decision["bin"] = PASS_SLOTS[index]
+            self._schedule_robot_pick(decision["bin"], res["conclusion"], "auto", source, source_slot)
+        elif decision["action"] == "recapture":
+            self._render_verdict("RECAPTURE", "Lỗi cần sửa. Kiểm tra bo và chụp lại; robot không gắp.")
+            self._set_robot_badge("không gắp")
         else:
             self._set_robot_badge("không gắp")
+            conclusion = res.get("conclusion", "không xác định")
+            if conclusion == "FAIL":
+                self._set_status("AOI báo FAIL nhưng không có lớp lỗi 0/1/2 để chọn khay C; robot không gắp.")
+            elif conclusion in ("REVIEW", "CONFIRM", "RECAPTURE"):
+                self._set_status(f"AOI trả {conclusion}; robot không gắp cho đến khi ảnh được xác nhận/chụp lại.")
+            else:
+                self._set_status(f"AOI trả {conclusion}; không có quy tắc gắp tương ứng.")
+
+    def _schedule_robot_pick(self, bin_name: str, conclusion: str, decided_by: str, source: str,
+                              source_slot: str = "B11") -> None:
+        self._robot_delay_job = {"bin": bin_name, "conclusion": conclusion,
+                                 "decided_by": decided_by, "source": source, "source_slot": source_slot}
+        self._set_robot_badge(f"chờ 5 giây → khay {BIN_TEXT[bin_name]}")
+        self._set_status("Kết luận đã xác nhận. Robot sẽ gắp sau 5 giây.")
+        self._robot_delay_after_id = self.root.after(
+            ROBOT_PICK_DELAY_MS, self._dispatch_delayed_robot_pick)
+
+    def _dispatch_delayed_robot_pick(self) -> None:
+        self._robot_delay_after_id = None
+        job = self._robot_delay_job
+        self._robot_delay_job = None
+        if job is not None:
+            self._robot_send(job["bin"], job["conclusion"], job["decided_by"], job["source"],
+                             job["source_slot"])
 
     def _operator_choice(self, bin_name: str | None) -> None:
         if self._robot_review is None:
@@ -1165,15 +1993,23 @@ class TkAOIApp:
             return
         self._robot_send(bin_name, conclusion, "operator", source)
 
-    def _robot_send(self, bin_name: str, conclusion: str, decided_by: str, source: str) -> None:
+    def _robot_send(self, bin_name: str, conclusion: str, decided_by: str, source: str,
+                    source_slot: str = "B11") -> None:
+        if getattr(self, "_robot_teach_mode", False):
+            self._set_status("Robot đang ở chế độ dạy tọa độ; không gửi lệnh gắp.")
+            return
+        if getattr(self, "_robot_state", "ready") != "ready":
+            self._set_robot_badge("chưa sẵn sàng")
+            self._set_status("Robot chưa sẵn sàng; PCB giữ tại B, không gửi lệnh gắp.")
+            return
         try:
-            job_id = self.robot.send(bin_name, conclusion, decided_by, source)
+            job_id = self.robot.send(bin_name, conclusion, decided_by, source, source_slot)
         except OSError as exc:
             self._set_robot_badge("lỗi")
             messagebox.showerror("Robot", f"Không ghi được lệnh cho robot: {exc}")
             return
-        self._robot_job = {"id": job_id, "bin": bin_name,
-                           "deadline": time.monotonic() + ROBOT_TIMEOUT_S}
+        self._robot_job = {"id": job_id, "bin": bin_name, "is_pass": bin_name in PASS_SLOTS,
+                            "deadline": time.monotonic() + ROBOT_TIMEOUT_S}
         self._set_robot_badge(f"đang gắp → khay {BIN_TEXT[bin_name]}")
         self.root.after(250, self._robot_poll)
 
@@ -1193,13 +2029,20 @@ class TkAOIApp:
         self._robot_job = None
         status = ack.get("status")
         if status == "done":
+            if job["is_pass"] and getattr(self, "_automation_enabled", False):
+                self._pass_slot_index += 1
             self._set_robot_badge("Sẵn sàng")
             self._set_status(f"Robot đã đặt bo vào khay {BIN_TEXT[job['bin']]}.")
+            if getattr(self, "_automation_enabled", False):
+                self._automation_phase = "đang nhận diện"
+                self._automation_schedule()
             return
         text = {"error": "lỗi", "expired": "lệnh hết hạn",
                 "timeout": "không phản hồi"}.get(status, str(status))
         self._set_robot_badge(text)
         self._set_status(f"Robot {text}. Kiểm tra robot và lấy bo ra bằng tay nếu cần.")
+        if getattr(self, "_automation_enabled", False):
+            self._stop_automation(f"Automation dừng: robot {text}; không thử gắp lại PCB hiện tại.")
         messagebox.showwarning("Robot", f"Robot {text}. {ack.get('error', '')}\n"
                                         "Kiểm tra robot và lấy bo ra bằng tay nếu cần.")
 
@@ -1266,12 +2109,16 @@ def main() -> int:
                       help="Select an imported checkpoint for full-frame A + calibrated B.")
     parser.add_argument("--robot", action="store_true",
                         help="Send sorting commands to scripts/robot_worker.py via robot_io/.")
+    parser.add_argument("--robot-autostart", choices=("sim", "real"),
+                        help="Start the robot worker from the UI after it opens.")
     parser.add_argument("--self-test", action="store_true")
     options = parser.parse_args()
     self_test = options.self_test or os.environ.get("AOI_SELF_TEST", "").strip() == "1"
     weights_path = None
-    if options.robot and not options.weights:
+    if (options.robot or options.robot_autostart) and not options.weights:
         parser.error("--robot needs --weights (A + B pipeline).")
+    if options.robot_autostart and not options.robot:
+        parser.error("--robot-autostart needs --robot.")
     if options.weights:
         weights_path = _RP / "assets" / "weights" / "pcb_camera" / options.weights
         if not weights_path.is_file():
@@ -1285,7 +2132,9 @@ def main() -> int:
         except Exception:
             pass
     app = TkAOIApp(root, self_test=self_test, weights_path=weights_path,
-                   robot_dir=_RP / "robot_io" if options.robot else None)
+                   robot_dir=_RP / "robot_io" if options.robot else None,
+                   robot_autostart=options.robot_autostart)
+    root.protocol("WM_DELETE_WINDOW", app.shutdown)
     root.report_callback_exception = app._report_tk_exception
     if not self_test and os.environ.get("AOI_LAUNCHER") == "1":
         def _hide_console_when_visible(tries: int = 0) -> None:

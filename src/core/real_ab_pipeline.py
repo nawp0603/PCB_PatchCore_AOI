@@ -33,13 +33,14 @@ def combine(a_items, b_action, b_regions_input, review_score=None, region_reason
                    (item["bbox"] for item in a_items)):
             unmatched.append(region)
 
-    if b_action in ("RECAPTURE", "CONFIRM"):
+    a_decision = decide(a_items)
+    if b_action in ("RECAPTURE", "CONFIRM") and a_decision["conclusion"] not in ("FAIL", "REWORK"):
         hint = ("Check PCB placement and capture again." if b_action == "RECAPTURE"
                 else "Keep the same PCB and press Space for a second capture.")
         decision = dict(level=3, conclusion=b_action, verdict=b_action,
                         reasons=[hint], details=[])
     else:
-        decision = decide(a_items)
+        decision = a_decision
         if decision["conclusion"] not in ("FAIL", "REWORK"):
             # decide() only rescues low-confidence A boxes when Branch B supplies z_diff;
             # here any A box (conf >= operating threshold) must still prevent a clean result.

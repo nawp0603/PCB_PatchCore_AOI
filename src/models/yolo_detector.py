@@ -2,8 +2,9 @@
 
 Data contract:
   * predict(image): accepts RGB uint8 (H, W, 3) ndarray OR image path.
-  * returns list[dict]: {"bbox": [x1, y1, x2, y2], "class_id": int,
-    "class_name": str, "conf": float}, sorted by descending confidence.
+   * returns list[dict]: {"bbox": [x1, y1, x2, y2], "class_id": int,
+     "routing_class_id": int, "class_name": str, "conf": float}, sorted by
+     descending confidence.
     For batch input via predict_batch(): returns list[list[dict]].
 
 Key invariants:
@@ -332,6 +333,7 @@ class YOLODetector:
             dets.append({
                 "bbox": [x1, y1, x2, y2],
                 "class_id": _NAME_TO_ID.get(name, cls_id),
+                "routing_class_id": cls_id,
                 "class_name": name,
                 "conf": conf,
             })
