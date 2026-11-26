@@ -2,9 +2,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from src.ui.tkinter_app import TkAOIApp, _use_branch_b
+from src.ui.tkinter_app import TkAOIApp, _pcb_present, _use_branch_b
 
 
 @pytest.fixture
@@ -47,6 +48,31 @@ def test_non_pick_conclusions_never_offer_or_send_pick(app, conclusion):
 
     app.robot.send.assert_not_called()
     assert not app._robot_blocking()
+
+
+def test_empty_frame_never_schedules_a_robot_pick(app):
+    app._after_result({"conclusion": "KHÔNG THẤY LỖI (chưa hiệu chuẩn)", "pcb_present": False}, "GigE camera:B11")
+
+    app.robot.send.assert_not_called()
+    assert not app._robot_blocking()
+
+
+def test_automation_stops_when_no_pcb_is_detected(app):
+    app._automation_enabled = True
+    app._stop_automation = Mock()
+
+    app._automation_after_result({"pcb_present": False}, "GigE camera:B11")
+
+    app._stop_automation.assert_called_once()
+
+
+def test_pcb_presence_requires_a_substantial_green_board_region():
+    empty = np.zeros((400, 400, 3), np.uint8)
+    board = empty.copy()
+    board[80:320, 80:320] = (20, 100, 20)
+
+    assert not _pcb_present(empty)
+    assert _pcb_present(board)
 
 
 def test_rework_without_routable_yolo_class_does_not_pick(app):

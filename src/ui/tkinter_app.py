@@ -39,6 +39,7 @@ from configs.station import (FAIL_SLOTS, PASS_SLOTS, SOURCE_SLOTS, TEACH_POINTS,
 from src.core.aoi_engine import DualPathAOIEngine  # noqa: E402
 from src.core.calibrated_camera import CalibratedCameraInspection  # noqa: E402
 from src.core.real_ab_pipeline import RealABInspection  # noqa: E402
+from src.core.board_align import board_region  # noqa: E402
 from src.core.patchcore_inspector import patchcore_designs  # noqa: E402
 from src.decision.sorting import sort_decision  # noqa: E402
 from src.service.robot_bridge import RobotBridge  # noqa: E402
@@ -159,6 +160,23 @@ ROBOT_TIMEOUT_S = 120.0
 ROBOT_PICK_DELAY_MS = 5000
 AUTOMATION_POLL_MS = 250
 AUTOMATION_MAX_RECAPTURES = 2
+PCB_MIN_AREA_RATIO = 0.02
+
+
+def _pcb_present(frame: np.ndarray) -> bool:
+    """Require a substantial green solder-mask region before allowing any robot route."""
+    return frame is not None and frame.ndim == 3 and board_region(frame).mean() >= PCB_MIN_AREA_RATIO
+
+
+def _empty_pcb_result(frame: np.ndarray) -> dict:
+    return {"level": 3, "conclusion": "RECAPTURE", "verdict": "RECAPTURE",
+            "reasons": ["Không phát hiện PCB trong khung hình; robot không gắp."], "details": [],
+            "items": [], "b_regions_unmatched": [], "patchcore_design": None,
+            "p_action": "SKIPPED", "p_regions": [], "p_review_score": None, "p_ms": 0.0,
+            "a_items": [], "raw_bgr": frame, "annotated_bgr": frame.copy(), "heatmap_bgr": None,
+            "alignment_mode": "skipped", "b_action": "SKIPPED", "b_pending": None,
+            "branch_b": False, "a_ms": 0.0, "b_ms": 0.0, "timings_ms": {"total": 0.0},
+            "pcb_present": False}
 
 
 def _use_branch_b(app) -> bool:
@@ -180,6 +198,8 @@ def _patchcore_design(app):
 
 
 def _board_text(value) -> str:
+    if value == "AUTO":
+        return "Tự nhận diện (YOLO + PatchCore)"
     if value == "A":
         return "Thiết kế A (nhánh A + B)"
     if value == "OTHER":
@@ -410,17 +430,8 @@ class TkAOIApp:
         self._btn(self.p_file, "Mở ảnh…", self._open_file).pack(fill="x", pady=(8, 0))
         self.p_gige.pack(fill="x", pady=(8, 0))
         if self.weights_path is not None:
-            board = tk.Frame(source, bg=CARD)
-            board.pack(side="bottom", fill="x")
-            self._heading(board, "LOẠI BO")
-            self.board_mode = tk.StringVar(value="A")
-            for value in ("A", *_patchcore_designs(), "OTHER"):
-                radio = tk.Radiobutton(board, text=_board_text(value), variable=self.board_mode,
-                                       value=value, command=self._switch_board, bg=CARD,
-                                       fg=INK, selectcolor=BG, activebackground=NEUTRAL,
-                                       activeforeground=INK, anchor="w", takefocus=True)
-                radio.pack(fill="x", ipady=4)
-                self._controls.append(radio)
+            # Production inspection always identifies the profile from the captured board.
+            self.board_mode = tk.StringVar(value="AUTO")
 
         actions = tk.Frame(left, bg=BG)
         actions.pack(fill="x", pady=(8, 0))
@@ -473,6 +484,7 @@ class TkAOIApp:
         self.btn_robot_connect.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self.btn_robot_disconnect = self._btn(row, "Ngắt robot", self._stop_robot)
         self.btn_robot_disconnect.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._btn(panel, "Dạy tọa độ (không Home)", self._start_robot_teaching).pack(fill="x", pady=(8, 0))
         row = tk.Frame(panel, bg=CARD)
         row.pack(fill="x", pady=(8, 0))
         row.columnconfigure((0, 1), weight=1, uniform="robot")
@@ -699,6 +711,19 @@ class TkAOIApp:
         def save_current(pose) -> None:
             self._set_current_robot_pose(pose)
             self._set_teach_pose(pose)
+            if point != "home":
+                try:
+                    home = _load_station_config(
+                        PROJECT_ROOT / "configs" / "robot_positions.json")["home"]
+                except (OSError, ValueError, KeyError):
+                    home = ()
+                if len(home) == 4 and all(abs(float(value) - float(reference)) <= 3.0
+                                          for value, reference in zip(pose, home)):
+                    messagebox.showwarning(
+                        "Dạy tọa độ",
+                        f"Dobot đang ở Home. Không lưu Home vào điểm {point.upper()}. "
+                        "Di chuyển tay robot đến vị trí khay trước rồi đọc lại tọa độ.")
+                    return
             self._persist_teach_pose(point, pose)
 
         self._send_robot_control("read_pose", {}, save_current)
@@ -1528,6 +1553,9 @@ class TkAOIApp:
     def _automation_after_result(self, res: dict[str, Any], source: str = "") -> None:
         if not getattr(self, "_automation_enabled", False):
             return
+        if res.get("pcb_present") is False:
+            self._stop_automation("Automation dừng: không phát hiện PCB tại B11, robot không gắp.")
+            return
         conclusion = res.get("conclusion", "")
         slot = source.rsplit(":", 1)[-1] if source.endswith(tuple(f":{name}" for name in SOURCE_SLOTS)) else None
         if sort_decision(res)["action"] == "pick":
@@ -1647,8 +1675,6 @@ class TkAOIApp:
                 self._real_ab_source = source_key
             context = self._real_ab_context
             pending = self._automation_slot_pending[slot] if slot else self._pending_camera_regions
-            use_b = _use_branch_b(self)
-            patchcore_design = _patchcore_design(self)
 
         def show(res):
             if self.weights_path is not None:
@@ -1666,8 +1692,7 @@ class TkAOIApp:
         def work():
             try:
                 if self.weights_path is not None:
-                    res = self.real_ab.inspect(img, pending=pending, use_b=use_b,
-                                               patchcore_design=patchcore_design)
+                    res = _empty_pcb_result(img) if not _pcb_present(img) else self.real_ab.inspect_auto(img, pending=pending)
                 else:
                     res = self.engine.inspect(
                         img, fast_align=True, pinned_board_id=pinned,
@@ -1730,17 +1755,22 @@ class TkAOIApp:
         self._show_raw(frame)
         self._render_items(frame, res.get("items", []))
         if self.weights_path is not None:
-            verdict = res["conclusion"]
+            verdict = "RECAPTURE" if res.get("pcb_present") is False else res["conclusion"]
             if verdict == "KHÔNG THẤY LỖI (chưa hiệu chuẩn)":
                 verdict = "NO REGIONS"
-            if res.get("patchcore_design"):
+            if res.get("pcb_present") is False:
+                metrics = "Không phát hiện PCB · robot không gắp"
+            elif res.get("patchcore_design"):
                 strong = sum(r["score"] >= res["p_review_score"] for r in res["p_regions"])
-                metrics = (f"PatchCore ({res['patchcore_design']}): {res['p_action']}, {strong} vùng ≥ "
-                           f"{res['p_review_score']:.2f} · A {res['a_ms']:.0f} ms · P {res['p_ms']:.0f} ms")
+                selected = f"Tự nhận diện: {res['selected_profile']} · " if res.get("selected_profile") else ""
+                metrics = (f"{selected}PatchCore ({res['patchcore_design']}): {res['p_action']}, {strong} vùng ≥ "
+                            f"{res['p_review_score']:.2f} · A {res['a_ms']:.0f} ms · P {res['p_ms']:.0f} ms")
             elif res["b_action"] == "SKIPPED":
-                metrics = f"B: không dùng (bo loại khác) · A {res['a_ms']:.0f} ms"
+                metrics = ("Tự nhận diện: không xác định · " if res.get("selected_profile") == "OTHER" else "") + \
+                          f"B: không dùng (bo loại khác) · A {res['a_ms']:.0f} ms"
             else:
-                metrics = f"B: {res['b_action']} · A {res['a_ms']:.0f} ms · B {res['b_ms']:.0f} ms"
+                selected = "Tự nhận diện: A · " if res.get("selected_profile") == "A" else ""
+                metrics = f"{selected}B: {res['b_action']} · A {res['a_ms']:.0f} ms · B {res['b_ms']:.0f} ms"
         else:
             verdict = "NO REGIONS" if res["level"] == 4 else "FAIL"
             times = res.get("timings_ms", {})
@@ -1837,7 +1867,26 @@ class TkAOIApp:
             return
         self._robot_teach_mode = teach_mode
         self._set_robot_state("connecting", "Đang kết nối chế độ dạy tọa độ..." if teach_mode
-                              else "Đang kết nối robot và về HOME...")
+                               else "Đang kết nối robot và về HOME...")
+
+    def _start_robot_teaching(self) -> None:
+        if self.robot_mode.get() != "real":
+            messagebox.showwarning("Dạy tọa độ", "Chọn Dobot thật trước khi dạy tọa độ.")
+            return
+        path = PROJECT_ROOT / "configs" / "robot_positions.json"
+        try:
+            config = _load_station_config(path)
+            config["station_calibrated"] = False
+            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Dạy tọa độ", f"Không mở được chế độ dạy: {exc}")
+            return
+        self._force_teach_on_next_start = True
+        if self._robot_process is not None and self._robot_process.poll() is None:
+            self._stop_robot()
+            self.root.after(1000, self._start_robot)
+        else:
+            self._start_robot()
 
     def _home_robot(self) -> None:
         if not messagebox.askyesno("Về Home", "Robot sẽ di chuyển về điểm Home đã lưu. Tiếp tục?"):
@@ -1940,6 +1989,10 @@ class TkAOIApp:
 
     def _after_result(self, res: dict[str, Any], source: str) -> None:
         if getattr(self, "robot", None) is None:
+            return
+        if res.get("pcb_present") is False:
+            self._set_robot_badge("không gắp")
+            self._set_status("Không phát hiện PCB trong khung hình; robot không gắp.")
             return
         decision = sort_decision(res)
         if decision["action"] == "pick":

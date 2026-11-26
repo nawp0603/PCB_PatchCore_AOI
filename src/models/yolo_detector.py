@@ -183,8 +183,7 @@ class YOLODetector:
                 return self.model.predict(
                     source=source, conf=float(conf), imgsz=int(fb),
                     device=self.device, verbose=False,
-                    rect=True, half=self.half,
-                    quantize=(16 if self.half else None), **nms)
+                    rect=True, half=self.half, **nms)
             except torch.cuda.OutOfMemoryError as e:
                 last = e
                 torch.cuda.empty_cache()
@@ -199,8 +198,7 @@ class YOLODetector:
             return self.model.predict(
                 source=source, conf=float(conf),
                 imgsz=min(int(imgsz), CPU_FALLBACK_IMGSZ),
-                device="cpu", verbose=False, rect=True, half=False,
-                quantize=None, **nms)
+                device="cpu", verbose=False, rect=True, half=False, **nms)
         except Exception:
             pass
         raise last if last is not None else RuntimeError("OOM retry failed")
@@ -223,15 +221,12 @@ class YOLODetector:
         import torch
         try:
             # Lock 3: prevent square padding + use FP16 on CUDA in a single call.
-            # NOTE: keep `half=` (required by tests) alongside `quantize=`
-            # so ultralytics uses the unified scheme without deprecation spam.
             results = self.model.predict(
                 source=bgr,
                 conf=self.conf_threshold if conf is None else float(conf),
                 imgsz=self.imgsz if imgsz is None else int(imgsz),
                 device=self.device, verbose=False,
-                rect=True, half=self.half,
-                quantize=(16 if self.half else None), **nms)
+                rect=True, half=self.half, **nms)
         except torch.cuda.OutOfMemoryError:
             if self.device != "cuda" or not fallback_on_oom:
                 raise
@@ -251,13 +246,11 @@ class YOLODetector:
         import torch
         try:
             # Lock 3: single batched call, rect=True, half=self.half.
-            # NOTE: keep `half=` (required by tests) alongside `quantize=`.
             results = self.model.predict(
                 source=bgrs,
                 conf=self.conf_threshold if conf is None else float(conf),
                 imgsz=int(imgsz), device=self.device, verbose=False,
-                rect=True, half=self.half,
-                quantize=(16 if self.half else None))
+                rect=True, half=self.half)
         except torch.cuda.OutOfMemoryError:
             if self.device != "cuda":
                 raise

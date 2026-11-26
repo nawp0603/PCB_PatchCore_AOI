@@ -80,7 +80,7 @@ class BoardAligner:
             return None, int(keep.sum()), err
         return H, int(keep.sum()), err
 
-    def align(self, bgr: np.ndarray):
+    def align(self, bgr: np.ndarray, *, allow_ecc: bool = True):
         """-> homography capture -> reference, or None (capture should be retaken)."""
         board = board_region(bgr)
         points, desc = self._features(bgr, board)
@@ -100,12 +100,13 @@ class BoardAligner:
             self.last = dict(method=method, inliers=n, reproj=err, board_iou=iou)
             if iou >= MIN_BOARD_IOU:
                 return H
-        H, cc = self._outline_ecc(bgr, board)
-        if H is not None:
-            iou = self._board_iou(board, H)
-            self.last = dict(method="outline+ecc", inliers=0, reproj=float("nan"), board_iou=iou, ecc=cc)
-            if iou >= MIN_BOARD_IOU and cc >= MIN_ECC:
-                return H
+        if allow_ecc:
+            H, cc = self._outline_ecc(bgr, board)
+            if H is not None:
+                iou = self._board_iou(board, H)
+                self.last = dict(method="outline+ecc", inliers=0, reproj=float("nan"), board_iou=iou, ecc=cc)
+                if iou >= MIN_BOARD_IOU and cc >= MIN_ECC:
+                    return H
         return None
 
     def _board_iou(self, board, H):

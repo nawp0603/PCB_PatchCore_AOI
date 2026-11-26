@@ -6,6 +6,7 @@ from time import perf_counter
 import cv2
 import numpy as np
 
+from src.core.board_align import BoardAligner
 from src.core.calibrated_camera import CalibratedCameraInspection
 from src.decision.logic import decide
 from src.models.yolo_detector import YOLODetector
@@ -115,6 +116,39 @@ class RealABInspection:
         self.backbone_weights = backbone_weights
         self._backbone = None
         self._patchcore = (None, None)                       # (design, inspector); one design on the GPU
+        self._profile_aligners = None
+
+    def _aligners_for_profiles(self):
+        if self._profile_aligners is None:
+            aligners = {"A": BoardAligner(self.camera.template)}
+            for design, (profile, _) in self.patchcore_dirs.items():
+                image = cv2.imdecode(np.fromfile(str(Path(profile) / "template_A.png"), np.uint8), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError(f"Cannot read PatchCore template for design {design}")
+                aligners[design] = BoardAligner(image)
+            self._profile_aligners = aligners
+        return self._profile_aligners
+
+    def select_profile(self, frame):
+        """Return the uniquely best-matching A/B/C/D/G profile, or OTHER when ambiguous."""
+        candidates = []
+        for design, aligner in self._aligners_for_profiles().items():
+            # ECC is deliberately reserved for the chosen PatchCore profile: running it
+            # against every profile makes a single inspection appear to hang.
+            if aligner.align(frame, allow_ecc=False) is None:
+                continue
+            last = dict(aligner.last)
+            inliers = int(last.get("inliers", 0))
+            reproj = float(last.get("reproj", float("inf")))
+            candidates.append({"design": design, "inliers": inliers,
+                               "board_iou": float(last.get("board_iou", 0.0)),
+                               "reproj": reproj, "method": last.get("method")})
+        candidates.sort(key=lambda item: (item["inliers"], item["board_iou"], -item["reproj"]), reverse=True)
+        if not candidates:
+            return "OTHER", candidates
+        if len(candidates) > 1 and candidates[0]["inliers"] - candidates[1]["inliers"] < 10:
+            return "OTHER", candidates
+        return candidates[0]["design"], candidates
 
     def _patchcore_for(self, design):
         if self._patchcore[0] == design:
@@ -136,6 +170,12 @@ class RealABInspection:
 
     def warmup(self) -> None:
         self._predict(np.zeros((1944, 2592, 3), np.uint8))
+
+    def inspect_auto(self, frame, pending=None) -> dict:
+        profile, candidates = self.select_profile(frame)
+        result = self.inspect(frame, pending=pending, use_b=profile == "A",
+                              patchcore_design=profile if profile in self.patchcore_dirs else None)
+        return {**result, "selected_profile": profile, "profile_candidates": candidates}
 
     def inspect(self, frame, pending=None, use_b=True, patchcore_design=None) -> dict:
         """use_b=False: board of another design, Branch B has no template for it.

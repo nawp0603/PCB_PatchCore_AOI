@@ -137,3 +137,48 @@ def test_inspect_without_branch_b_skips_camera(pipeline):
     assert result["branch_b"] is False
     assert result["b_pending"] is None
     assert result["conclusion"] == "REVIEW"
+
+
+class _Aligner:
+    def __init__(self, matched, **last):
+        self.matched = matched
+        self.last = last
+
+    def align(self, frame, **kwargs):
+        return np.eye(3) if self.matched else None
+
+
+def test_select_profile_uses_unique_best_alignment(pipeline):
+    pipeline._profile_aligners = {
+        "A": _Aligner(True, inliers=42, board_iou=.99, reproj=1.2, method="ratio"),
+        "B": _Aligner(True, inliers=88, board_iou=.98, reproj=.8, method="ratio"),
+        "C": _Aligner(False),
+    }
+
+    profile, candidates = pipeline.select_profile(np.zeros((64, 64, 3), np.uint8))
+
+    assert profile == "B"
+    assert [candidate["design"] for candidate in candidates] == ["B", "A"]
+
+
+def test_select_profile_rejects_ambiguous_alignment(pipeline):
+    pipeline._profile_aligners = {
+        "B": _Aligner(True, inliers=80, board_iou=.99, reproj=.8, method="ratio"),
+        "C": _Aligner(True, inliers=76, board_iou=.99, reproj=.7, method="ratio"),
+    }
+
+    profile, _ = pipeline.select_profile(np.zeros((64, 64, 3), np.uint8))
+
+    assert profile == "OTHER"
+
+
+def test_inspect_auto_dispatches_selected_patchcore_profile(pipeline):
+    pipeline.patchcore_dirs = {"C": (None, None)}
+    pipeline.select_profile = Mock(return_value=("C", []))
+    pipeline.inspect = Mock(return_value={"conclusion": "REVIEW"})
+
+    result = pipeline.inspect_auto(np.zeros((64, 64, 3), np.uint8), pending=("old",))
+
+    pipeline.inspect.assert_called_once_with(pipeline.inspect.call_args.args[0], pending=("old",),
+                                             use_b=False, patchcore_design="C")
+    assert result["selected_profile"] == "C"
