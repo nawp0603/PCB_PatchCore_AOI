@@ -47,13 +47,13 @@ CLASS_COLORS_BGR: dict[int, tuple[int, int, int]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Robot action mapping (4 levels -> sort bins; kept for API/test compatibility)
+# Robot action mapping (confidence levels -> sort bins; kept for API/test compatibility)
 # ---------------------------------------------------------------------------
 LEVEL_TO_ROBOT: dict[int, dict[str, Any]] = {
     1: {"should_pick": True, "bin_id": 1, "target_bin": "BIN_FAIL",
         "label": "Bin 1 - Critical Scrap (FAIL)"},
-    2: {"should_pick": True, "bin_id": 2, "target_bin": "BIN_REWORK",
-        "label": "Bin 2 - Repairable (REWORK)"},
+    2: {"should_pick": True, "bin_id": 1, "target_bin": "BIN_FAIL",
+        "label": "Bin 1 - Medium confidence (FAIL)"},
     3: {"should_pick": True, "bin_id": 3, "target_bin": "BIN_REVIEW",
         "label": "Bin 3 - Operator Check (REVIEW)"},
     4: {"should_pick": True, "bin_id": 4, "target_bin": "BIN_PASS",

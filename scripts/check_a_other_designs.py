@@ -4,7 +4,7 @@
 
 Default model real_3class.pt was trained on designs A, B, C (not D, G). Every box drawn on a spot that is NOT a real defect
 is a false alarm the GOOD board of a new design could also get. A false box at or above the
-FAIL/REWORK threshold sends a good board to the FAIL bin automatically.
+FAIL threshold sends a good board to the FAIL bin automatically.
 """
 from __future__ import annotations
 

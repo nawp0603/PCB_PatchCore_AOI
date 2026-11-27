@@ -8,7 +8,7 @@ YOLO_ERROR_BINS = {0: "C11", 1: "C12", 2: "C13"}
 def sort_decision(result: dict) -> dict:
     """Return an automatic pick only for a routable inspection conclusion."""
     conclusion = result.get("conclusion")
-    if conclusion in ("FAIL", "REWORK"):
+    if conclusion == "FAIL":
         counts = {class_id: 0 for class_id in YOLO_ERROR_BINS}
         for item in result.get("a_items", result.get("items", ())):
             if item.get("source") != "yolo":

@@ -15,10 +15,10 @@ Folder này là bản sao của `PCB_AOI_UI` (24/11/2026). Mọi phần cũ gi�
 
 | Tình huống | Kết luận |
 |---|---|
-| YOLO có lỗi đủ ngưỡng | FAIL / REWORK như cũ. PatchCore không thay đổi. |
+| YOLO có lỗi đủ ngưỡng | FAIL. PatchCore không thay đổi. |
 | Không có lỗi YOLO, có vùng PatchCore điểm ≥ 1,30 nằm ngoài hộp YOLO | REVIEW: người vận hành chọn khay |
 | Không có gì vượt ngưỡng | KHÔNG THẤY LỖI (chưa hiệu chuẩn) |
-| Không căn được bo với ảnh mẫu | Giữ FAIL/REWORK của YOLO nếu có, nếu không thì CHỤP LẠI |
+| Không căn được bo với ảnh mẫu | Giữ FAIL của YOLO nếu có, nếu không thì CHỤP LẠI |
 
 - PatchCore **không bao giờ tự kết luận FAIL**, vì nó không biết loại lỗi. Nó chỉ buộc người vận hành xem lại.
 - Vùng có điểm từ 1,0 đến dưới 1,30 được ghi là "vùng lạ yếu", không ảnh hưởng kết luận.

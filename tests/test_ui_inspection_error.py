@@ -47,15 +47,15 @@ def test_dispatch_error_route_calls_inspect_error(immediate_worker, weights_path
     app.engine = Mock()
     app.real_ab = Mock()
     inspector = app.real_ab if weights_path else app.engine
-    inspector.inspect.side_effect = RuntimeError("bo loi")
+    (inspector.inspect_auto if weights_path else inspector.inspect).side_effect = RuntimeError("bo loi")
     app.root = Mock()
     app.root.after.side_effect = lambda ms, cb: cb()
 
-    TkAOIApp._run_inspect_worker(app, img=np.zeros((64, 64, 3), np.uint8),
+    TkAOIApp._run_inspect_worker(app, img=np.full((64, 64, 3), (20, 100, 20), np.uint8),
                                  pinned=None, source="GigE camera")
 
     app._inspect_error.assert_called_once()
-    inspector.inspect.assert_called_once()
+    (inspector.inspect_auto if weights_path else inspector.inspect).assert_called_once()
     assert "bo loi" in str(app._inspect_error.call_args)
     assert app._set_busy.call_args_list == [call(True), call(False)]
 
@@ -75,12 +75,12 @@ def test_file_confirm_reuses_pending_only_for_same_image(immediate_worker):
     app.root.after.side_effect = lambda ms, cb: cb()
     app.real_ab = Mock()
     candidate = object()
-    app.real_ab.inspect.return_value = {"b_pending": candidate}
-    frame = np.zeros((64, 64, 3), np.uint8)
+    app.real_ab.inspect_auto.return_value = {"b_pending": candidate}
+    frame = np.full((64, 64, 3), (20, 100, 20), np.uint8)
     for image in (frame, frame, frame.copy()):
         app._run_inspect_worker(image, pinned=None, source="test.png")
 
-    pending = [args.kwargs["pending"] for args in app.real_ab.inspect.call_args_list]
+    pending = [args.kwargs["pending"] for args in app.real_ab.inspect_auto.call_args_list]
     assert pending == [None, candidate, None]
 
 

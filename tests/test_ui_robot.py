@@ -75,8 +75,8 @@ def test_pcb_presence_requires_a_substantial_green_board_region():
     assert _pcb_present(board)
 
 
-def test_rework_without_routable_yolo_class_does_not_pick(app):
-    app._after_result({"conclusion": "REWORK", "items": [{"source": "patchcore"}]}, "a.png")
+def test_fail_without_routable_yolo_class_does_not_pick(app):
+    app._after_result({"conclusion": "FAIL", "items": [{"source": "patchcore"}]}, "a.png")
 
     app.robot.send.assert_not_called()
 
@@ -217,7 +217,7 @@ def test_automation_recaptures_twice_then_pauses(app):
 
     assert app._automation_recaptures == 2
     assert app._automation_schedule.call_count == 2
-    app._automation_after_result({"conclusion": "REWORK"})
+    app._automation_after_result({"conclusion": "REVIEW"})
     app._stop_automation.assert_called_once()
 
 

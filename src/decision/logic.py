@@ -1,11 +1,11 @@
-"""Four-level decision rule: FAIL / REWORK / REVIEW / PASS (plan.md Section 2.4).
+"""Three-conclusion decision rule: FAIL / REVIEW / PASS (plan.md Section 2.4).
 
 Each evidence item (Box Fusion / ensemble output) is a dict with fields:
   class_id (int), class_name (str), conf (float | None),   # S_final (0..1)
   source ("yolo"|"branchb"|"fused"), bbox (list[float]),
   z_diff (float | None), area (float | None).
 
-Priority: FAIL > REWORK > REVIEW > PASS.
+Priority: FAIL > REVIEW > PASS.
 No OR-style rule such as "anomaly_z >= 2.0 AND yolo_conf_max >= 0.30"
 (if YOLO misses, the system would still pick PASS). The two REVIEW cases are
 handled independently per rule table 2.4 (3a recall rescue for 6 classes;
@@ -18,12 +18,12 @@ from typing import Any
 
 # --- Class groups per plan.md Section 2.4 ----------------------------------
 FAIL_CLASSES = {0, 1, 5}        # open_circuit, short, missing_hole
-REWORK_CLASSES = {2, 3, 4}      # mouse_bite, spur, spurious_copper
-ALL_CLASSES = FAIL_CLASSES | REWORK_CLASSES
+MEDIUM_FAIL_CLASSES = {2, 3, 4}  # mouse_bite, spur, spurious_copper
+ALL_CLASSES = FAIL_CLASSES | MEDIUM_FAIL_CLASSES
 
 # --- Thresholds per plan.md Section 2.4 ------------------------------------
 CONF_HIGH = 0.55        # level 1: S_final >= 0.55 -> FAIL / HIGH
-CONF_MEDIUM = 0.35      # level 2: S_final >= 0.35 -> REWORK / MEDIUM
+CONF_MEDIUM = 0.35      # level 2: S_final >= 0.35 -> FAIL / MEDIUM
 CONF_LOW_LO = 0.20      # level 3a: 0.20 <= S_final < 0.35 (low prediction)
 Z_REVIEW = 2.0          # level 3a: Z_diff >= 2.0 in Branch B -> recall rescue
 Z_OPENSET = 3.5         # level 3b: Z_diff >= 3.5 and Area >= 100 -> open-set
@@ -31,7 +31,7 @@ AREA_OPENSET = 100.0    # px^2, condition combined with Z_OPENSET
 
 
 def decide(items: list[dict[str, Any]]) -> dict[str, Any]:
-    """Convert fused evidence items into a 4-level inspection decision.
+    """Convert fused evidence items into a three-conclusion inspection decision.
 
     Returns:
       {"level": int, "conclusion": str, "verdict": str,
@@ -65,16 +65,16 @@ def decide(items: list[dict[str, Any]]) -> dict[str, Any]:
                  f"Critical defect '{it['class_name']}' (S_final={it['conf']:.3f} >= {CONF_HIGH})", it)
         return _pack(1, "FAIL", "HIGH", reasons, details)
 
-    # --- Level 2: REWORK / MEDIUM ------------------------------------------
-    rework_items = _has(lambda it: (
-        it.get("class_id") in REWORK_CLASSES
+    # --- Level 2: FAIL / MEDIUM --------------------------------------------
+    medium_fail_items = _has(lambda it: (
+        it.get("class_id") in MEDIUM_FAIL_CLASSES
         and it.get("conf") is not None
         and it["conf"] >= CONF_MEDIUM))
-    if rework_items:
-        for it in rework_items:
-            note(2, "REWORK", "MEDIUM",
-                 f"Repairable defect '{it['class_name']}' (S_final={it['conf']:.3f} >= {CONF_MEDIUM})", it)
-        return _pack(2, "REWORK", "MEDIUM", reasons, details)
+    if medium_fail_items:
+        for it in medium_fail_items:
+            note(2, "FAIL", "MEDIUM",
+                 f"Defect '{it['class_name']}' (S_final={it['conf']:.3f} >= {CONF_MEDIUM})", it)
+        return _pack(2, "FAIL", "MEDIUM", reasons, details)
 
     # --- Level 3a: REVIEW recall rescue (6 classes, low conf, Branch B Z>=2.0)
     review3a = _has(lambda it: (
@@ -108,7 +108,7 @@ def decide(items: list[dict[str, Any]]) -> dict[str, Any]:
     # --- Level 4: PASS / NONE ----------------------------------------------
     for it in items:
         note(4, "PASS", "NONE",
-             "Candidate region below FAIL / REWORK / REVIEW thresholds", it)
+              "Candidate region below FAIL / REVIEW thresholds", it)
     return _pack(4, "PASS", "NONE", reasons, details)
 
 

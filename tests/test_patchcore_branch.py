@@ -37,7 +37,7 @@ def test_yolo_fail_is_kept_with_patchcore_regions():
     assert r["conclusion"] == "FAIL" and sort_decision(r)["bin"] == "C11"
 
 
-@pytest.mark.parametrize(("items", "expected"), [([det()], "FAIL"), ([det("spur", 2)], "REWORK"),
+@pytest.mark.parametrize(("items", "expected"), [([det()], "FAIL"), ([det("spur", 2)], "FAIL"),
                                                   ([], "RECAPTURE"), ([det(conf=0.3)], "RECAPTURE")])
 def test_unaligned_board_keeps_yolo_fail_else_recapture(items, expected):
     r = ab.combine_patchcore(items, "RECAPTURE", [], T)

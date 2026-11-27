@@ -5,7 +5,7 @@ Ban sao sach cua PCB_DualPath_AOI, chi gom nhung gi can de chay UI tren bo mach 
 ## Chay
 - `run_ui.bat` : UI voi model `real_3class.pt` (YOLO11n, nhanh A anh nguyen kho + nhanh B hieu chuan).
   Model 3 lop (23/11/2026): missing_hole = mach tit -> FAIL, open_circuit = mach ho -> FAIL,
-  spur = thua thiec/dong -> REWORK. Train tren thiet ke A, B, C; D va G de rieng lam tap test.
+   spur = thua thiec/dong -> FAIL (nguong 0.35). Train tren thiet ke A, B, C; D va G de rieng lam tap test.
   Model cu 6 lop van chay duoc: `run_ui.bat --weights real_all_boards.pt`.
 - `run_ui.bat --camera-quality` : chi nhanh B hieu chuan.
 - `run_tests.bat` : chay test.

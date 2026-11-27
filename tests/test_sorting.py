@@ -24,7 +24,7 @@ def test_yolo_error_class_selects_physical_error_bin(class_id, bin_name):
 
 def test_unclassified_or_non_yolo_error_never_picks():
     assert sort_decision({"conclusion": "FAIL"}) == {"action": "none", "bin": None}
-    assert sort_decision({"conclusion": "REWORK", "items": [
+    assert sort_decision({"conclusion": "FAIL", "items": [
         {"source": "patchcore", "class_id": 2}]}) == {"action": "none", "bin": None}
 
 

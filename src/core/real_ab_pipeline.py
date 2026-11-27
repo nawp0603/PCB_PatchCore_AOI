@@ -20,7 +20,7 @@ B_REVIEW_SCORE = 12.0
 # Designs B, C, D, G: position-aware PatchCore (patchcore_inspector.py). A PatchCore region outside every
 # YOLO box forces REVIEW at its design's P_REVIEW_SCORE (1.30, calibrated so that <=5% of held-out GOOD
 # captures of B/C are flagged). PatchCore never gives FAIL by itself: the class and the FAIL bin stay
-# with YOLO. If the board cannot be aligned to the reference, a YOLO FAIL/REWORK is kept, otherwise the
+# with YOLO. If the board cannot be aligned to the reference, a YOLO FAIL is kept, otherwise the
 # board must be re-captured.
 PATCHCORE_SOURCE = "patchcore"
 
@@ -35,19 +35,19 @@ def combine(a_items, b_action, b_regions_input, review_score=None, region_reason
             unmatched.append(region)
 
     a_decision = decide(a_items)
-    if b_action in ("RECAPTURE", "CONFIRM") and a_decision["conclusion"] not in ("FAIL", "REWORK"):
+    if b_action in ("RECAPTURE", "CONFIRM") and a_decision["conclusion"] != "FAIL":
         hint = ("Check PCB placement and capture again." if b_action == "RECAPTURE"
                 else "Keep the same PCB and press Space for a second capture.")
         decision = dict(level=3, conclusion=b_action, verdict=b_action,
                         reasons=[hint], details=[])
     else:
         decision = a_decision
-        if decision["conclusion"] not in ("FAIL", "REWORK"):
+        if decision["conclusion"] != "FAIL":
             # decide() only rescues low-confidence A boxes when Branch B supplies z_diff;
             # here any A box (conf >= operating threshold) must still prevent a clean result.
             reasons = []
             if a_items:
-                reasons.append("A phát hiện lỗi độ tin cậy thấp (dưới ngưỡng FAIL/REWORK)")
+                reasons.append("A phát hiện lỗi độ tin cậy thấp (dưới ngưỡng FAIL)")
             # A region without a score is treated as strong, so it can never pass silently.
             if any(region.get("score", float("inf")) >= review_score for region in unmatched):
                 reasons.append(region_reason)
@@ -60,10 +60,10 @@ def combine(a_items, b_action, b_regions_input, review_score=None, region_reason
 
 
 def combine_patchcore(a_items, p_action, p_regions, review_score) -> dict:
-    """YOLO + PatchCore. Unaligned board: keep a YOLO FAIL/REWORK, otherwise re-capture."""
+    """YOLO + PatchCore. Unaligned board: keep a YOLO FAIL, otherwise re-capture."""
     if p_action == "RECAPTURE":
         result = combine(a_items, "INSPECT", [])
-        if result["conclusion"] in ("FAIL", "REWORK"):
+        if result["conclusion"] == "FAIL":
             return result
         result = combine(a_items, "RECAPTURE", [])
         return {**result, "reasons": ["Không căn được bo với ảnh mẫu (PatchCore): đặt lại bo và chụp lại."]}

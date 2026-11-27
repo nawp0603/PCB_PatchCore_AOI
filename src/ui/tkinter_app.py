@@ -65,7 +65,6 @@ MONO_FONT = ("Consolas", 10)
 INSPECT_TEXT = "KIỂM TRA  (Space)"
 VERDICTS = {
     "FAIL": ("✕ FAIL", ERROR),
-    "REWORK": ("⚠ REWORK", "#C2410C"),
     "REVIEW": ("! REVIEW", "#B45309"),
     "CONFIRM": ("↻ CHỤP XÁC NHẬN", "#1D4ED8"),
     "RECAPTURE": ("⟲ CHỤP LẠI", "#6D28D9"),
@@ -144,11 +143,10 @@ def _reason_text(res, verdict):
     if verdict in REASON_TEXT:
         return REASON_TEXT[verdict]
     details = [d for d in res.get("details") or [] if d.get("conf") is not None]
-    if res.get("conclusion") in ("FAIL", "REWORK") and details:
+    if res.get("conclusion") == "FAIL" and details:
         top = max(details, key=lambda d: d["conf"])
-        lead = "Lỗi nghiêm trọng" if res["conclusion"] == "FAIL" else "Lỗi cần sửa"
         more = f" · +{len(details) - 1} lỗi khác" if len(details) > 1 else ""
-        return f"{lead}: {_item_label(top)} · tin cậy {top['conf']:.2f}{more}"
+        return f"Lỗi phát hiện: {_item_label(top)} · tin cậy {top['conf']:.2f}{more}"
     reason = next(iter(res.get("reasons") or []), "")
     return reason[:1].upper() + reason[1:]
 
@@ -1565,7 +1563,7 @@ class TkAOIApp:
             self._automation_phase = "chờ robot gắp"
             self._automation_schedule()
             return
-        if conclusion in ("CONFIRM", "RECAPTURE", "REWORK"):
+        if conclusion in ("CONFIRM", "RECAPTURE"):
             self._automation_recaptures += 1
             if self._automation_recaptures > AUTOMATION_MAX_RECAPTURES:
                 self._stop_automation("Automation tạm dừng: chụp lại quá nhiều lần. Kiểm tra PCB/camera.")
@@ -1783,7 +1781,7 @@ class TkAOIApp:
         self._set_status(f"Đã kiểm tra · {source}")
 
     def _count_result(self, verdict: str) -> None:
-        bucket = {"FAIL": "fail", "REWORK": "fail", "REVIEW": "review",
+        bucket = {"FAIL": "fail", "REVIEW": "review",
                   "NO REGIONS": "pass"}.get(verdict)
         if bucket:
             self._stats = {**self._stats, "total": self._stats["total"] + 1,

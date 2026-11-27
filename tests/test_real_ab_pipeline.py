@@ -51,7 +51,7 @@ def test_region_without_score_counts_as_strong():
 
 
 @pytest.mark.parametrize(("item", "conclusion"), [
-    (detection(), "FAIL"), (detection(3, "spur"), "REWORK"),
+    (detection(), "FAIL"), (detection(3, "spur"), "FAIL"),
     # 3-class model (real_3class.pt): names map to the same internal ids
     (detection(5, "missing_hole"), "FAIL"), (detection(0, "open_circuit"), "FAIL"),
 ])
@@ -78,7 +78,7 @@ def test_overlap_does_not_change_a_decision():
 @pytest.mark.parametrize("item", [
     detection(conf=0.25),                      # FAIL class below 0.55
     detection(5, "missing_hole", conf=0.50),   # FAIL class below 0.55
-    detection(3, "spur", conf=0.30),           # REWORK class below 0.35
+    detection(3, "spur", conf=0.30),           # medium FAIL class below 0.35
 ])
 @pytest.mark.parametrize("regions", [[], [{**REGION, "box": (0, 0, 32, 32)}]])
 def test_low_confidence_a_box_is_review_never_pass(item, regions):
